@@ -1,0 +1,12 @@
+[package]
+name = "jxlit_wasm_bindings"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+jxlit = { path = "../rust-jxlit" }
+wasm-bindgen = "0.2"

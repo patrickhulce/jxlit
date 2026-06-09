@@ -1,0 +1,16 @@
+{
+  "name": "@jxlit/wasm",
+  "version": "0.1.0",
+  "description": "WebAssembly bindings for jxlit",
+  "type": "module",
+  "main": "index.js",
+  "license": "MIT",
+  "scripts": {
+    "build": "wasm-pack build --target nodejs --out-dir pkg",
+    "test": "node --experimental-wasm-modules --test test/decode.test.js"
+  },
+  "files": [
+    "index.js",
+    "pkg"
+  ]
+}

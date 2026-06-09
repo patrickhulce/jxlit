@@ -1,0 +1,13 @@
+[package]
+name = "jxlit_python_bindings"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "jxlit_python_bindings"
+crate-type = ["cdylib"]
+
+[dependencies]
+jxlit = { path = "../rust-jxlit" }
+pyo3 = { version = "0.23", features = ["extension-module"] }

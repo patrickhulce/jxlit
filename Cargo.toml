@@ -1,0 +1,22 @@
+[workspace]
+members = [
+    "src/rust-jxlit",
+    "src/python-jxlit",
+    "src/node-jxlit",
+    "src/wasm-jxlit",
+]
+default-members = [
+    "src/rust-jxlit",
+    "src/node-jxlit",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3

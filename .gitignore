@@ -1,0 +1,8 @@
+/target/
+**/pkg/
+node_modules/
+src/python-jxlit/.venv/
+*.node
+dist/
+src/node-jxlit/binding.js
+src/node-jxlit/binding.d.ts

@@ -1,0 +1,3 @@
+packages:
+  - src/node-jxlit
+  - src/wasm-jxlit

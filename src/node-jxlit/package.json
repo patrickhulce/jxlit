@@ -1,0 +1,24 @@
+{
+  "name": "@jxlit/node",
+  "version": "0.1.0",
+  "description": "Node.js bindings for jxlit",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "license": "MIT",
+  "scripts": {
+    "build": "napi build --cargo-name jxlit_node_bindings --platform --release --js binding.js --dts binding.d.ts",
+    "build:debug": "napi build --cargo-name jxlit_node_bindings --platform --js binding.js --dts binding.d.ts",
+    "test": "node --test test/decode.test.js",
+    "format": "prettier --write .",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "^2.18.4",
+    "@types/node": "^22.10.2",
+    "prettier": "^3.4.2",
+    "typescript": "^5.7.2"
+  },
+  "napi": {
+    "name": "jxlit-node"
+  }
+}

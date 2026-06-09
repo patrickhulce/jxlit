@@ -1,0 +1,12 @@
+{
+  "name": "jxlit",
+  "private": true,
+  "version": "0.1.0",
+  "description": "JPEG XL bindings for Python, Node.js, and WebAssembly",
+  "license": "MIT",
+  "scripts": {
+    "build:node": "pnpm --dir src/node-jxlit build",
+    "build:wasm": "pnpm --dir src/wasm-jxlit build",
+    "build": "pnpm build:node && pnpm build:wasm"
+  }
+}
