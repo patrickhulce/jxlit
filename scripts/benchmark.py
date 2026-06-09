@@ -52,7 +52,7 @@ class LanguageSummary:
     aggregate_mps: float
     total_worker_seconds: float
     batch_wall_seconds: float
-    parallel_efficiency: float
+    overhead: float
 
 
 def parse_args() -> argparse.Namespace:
@@ -210,7 +210,10 @@ def aggregate_language(
     total_megapixels = megapixels * total_iterations
     aggregate_fps = total_iterations / batch_wall_seconds
     aggregate_mps = total_megapixels / batch_wall_seconds
-    parallel_efficiency = total_worker_seconds / (batch_wall_seconds * workers)
+    # Share of wall time not spent in measured decode work (0-100%).
+    overhead = (
+        1.0 - total_worker_seconds / (batch_wall_seconds * workers)
+    ) * 100.0
 
     return LanguageSummary(
         lang=lang,
@@ -234,7 +237,7 @@ def aggregate_language(
         aggregate_mps=aggregate_mps,
         total_worker_seconds=total_worker_seconds,
         batch_wall_seconds=batch_wall_seconds,
-        parallel_efficiency=parallel_efficiency,
+        overhead=overhead,
     )
 
 
@@ -262,6 +265,10 @@ def run_language_batch(
 
 def format_float(value: float, digits: int = 2) -> str:
     return f"{value:.{digits}f}"
+
+
+def format_percent(value: float, digits: int = 1) -> str:
+    return f"{value:.{digits}f}%"
 
 
 def print_language_summary(summary: LanguageSummary) -> None:
@@ -295,7 +302,7 @@ def print_language_summary(summary: LanguageSummary) -> None:
         f"MP/s={format_float(summary.aggregate_mps)} "
         f"worker_seconds={format_float(summary.total_worker_seconds)} "
         f"wall_seconds={format_float(summary.batch_wall_seconds)} "
-        f"parallel_efficiency={format_float(summary.parallel_efficiency, 3)}"
+        f"overhead={format_percent(summary.overhead)}"
     )
 
 
@@ -303,7 +310,7 @@ def print_cross_language_table(summaries: list[LanguageSummary]) -> None:
     print("\n== cross-language summary ==")
     header = (
         f"{'lang':<8} {'workers':>7} {'fps':>10} {'MP/s':>10} "
-        f"{'worker_s':>10} {'wall_s':>10} {'efficiency':>10}"
+        f"{'worker_s':>10} {'wall_s':>10} {'overhead%':>10}"
     )
     print(header)
     print("-" * len(header))
@@ -315,7 +322,7 @@ def print_cross_language_table(summaries: list[LanguageSummary]) -> None:
             f"{format_float(summary.aggregate_mps):>10} "
             f"{format_float(summary.total_worker_seconds):>10} "
             f"{format_float(summary.batch_wall_seconds):>10} "
-            f"{format_float(summary.parallel_efficiency, 3):>10}"
+            f"{format_percent(summary.overhead):>10}"
         )
 
 

@@ -8,7 +8,13 @@ license.workspace = true
 crate-type = ["rlib"]
 
 [dependencies]
-jxl-oxide = { version = "0.12", default-features = false }
+jxl-bitstream = "1.1"
+jxl-color = "0.11"
+jxl-frame = "0.13"
+jxl-image = "0.13"
+jxl-oxide-common = "1.0"
+jxl-render = "0.12"
+jxl-threadpool = "1.0"
 
 [dev-dependencies]
 png = "0.17"

@@ -126,7 +126,8 @@ function main(): void {
     megapixels,
     decode_seconds: decodeSeconds,
     latency_ms: {
-      mean: latenciesMs.reduce((sum, value) => sum + value, 0) / latenciesMs.length,
+      mean:
+        latenciesMs.reduce((sum, value) => sum + value, 0) / latenciesMs.length,
       p50: percentile(sorted, 50),
       p95: percentile(sorted, 95),
       min: sorted[0],
