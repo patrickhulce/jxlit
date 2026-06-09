@@ -1,5 +1,5 @@
 .PHONY: all build lint lint-fix typecheck test format benchmark \
-        build-rust build-python build-node build-wasm build-bench-rust \
+        build-rust build-python build-node build-wasm build-bench-rust build-bench-python \
         lint-rust lint-python lint-node lint-wasm \
         lint-fix-rust lint-fix-python lint-fix-node lint-fix-wasm \
         typecheck-python typecheck-node typecheck-wasm \
@@ -103,13 +103,16 @@ test-wasm: build-wasm
 build-bench-rust:
 	cargo build --release -p jxlit --bin jxlit-benchmark
 
-benchmark: build-bench-rust build-python build-node build-wasm
+build-bench-python:
+	cd src/python-jxlit && uv sync && uv run maturin develop --release --uv
+
+benchmark: build-bench-rust build-bench-python build-node build-wasm
 	python3 scripts/benchmark.py $(BENCHMARK_ARGS)
 
 benchmark-rust: build-bench-rust
 	python3 scripts/benchmark.py $(BENCHMARK_ARGS) --langs rust
 
-benchmark-python: build-python
+benchmark-python: build-bench-python
 	python3 scripts/benchmark.py $(BENCHMARK_ARGS) --langs python
 
 benchmark-node: build-node
