@@ -1,8 +1,72 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { test } from "node:test";
 import * as assert from "node:assert/strict";
+import { PNG } from "pngjs";
+
 import { decode } from "../dist/index.js";
 
-test("decode returns empty buffer", () => {
-  const result = decode(Buffer.from("not-a-jxl"));
-  assert.equal(result.length, 0);
+const ASSETS_DIR = join(process.cwd(), "../../assets");
+const JXL_FIXTURE = join(ASSETS_DIR, "colors_e1_d0p5_fd4.jxl");
+const PNG_FIXTURE = join(ASSETS_DIR, "colors.png");
+const MAE_TOLERANCE = 0.02;
+
+function loadPngRgbF32(path: string): {
+  height: number;
+  width: number;
+  channels: number;
+  pixels: Float32Array;
+} {
+  const png = PNG.sync.read(readFileSync(path));
+  const channels = 3;
+  const pixels = new Float32Array(png.width * png.height * channels);
+
+  for (let y = 0; y < png.height; y += 1) {
+    for (let x = 0; x < png.width; x += 1) {
+      const src = (png.width * y + x) * 4;
+      const dst = (png.width * y + x) * channels;
+      pixels[dst] = png.data[src] / 255;
+      pixels[dst + 1] = png.data[src + 1] / 255;
+      pixels[dst + 2] = png.data[src + 2] / 255;
+    }
+  }
+
+  return {
+    height: png.height,
+    width: png.width,
+    channels,
+    pixels,
+  };
+}
+
+function meanAbsError(a: Float32Array, b: Float32Array): number {
+  assert.equal(a.length, b.length);
+  let total = 0;
+  for (let i = 0; i < a.length; i += 1) {
+    total += Math.abs(a[i] - b[i]);
+  }
+  return total / a.length;
+}
+
+test("decode colors fixture is close to png", () => {
+  const decoded = decode(readFileSync(JXL_FIXTURE));
+  const expected = loadPngRgbF32(PNG_FIXTURE);
+
+  assert.equal(decoded.height, expected.height);
+  assert.equal(decoded.width, expected.width);
+  assert.equal(decoded.channels, expected.channels);
+  assert.deepEqual(decoded.pixels.shape, [
+    expected.height,
+    expected.width,
+    expected.channels,
+  ]);
+
+  const mae = meanAbsError(
+    decoded.pixels.data as Float32Array,
+    expected.pixels,
+  );
+  assert.ok(
+    mae < MAE_TOLERANCE,
+    `mean absolute error ${mae} exceeds ${MAE_TOLERANCE}`,
+  );
 });

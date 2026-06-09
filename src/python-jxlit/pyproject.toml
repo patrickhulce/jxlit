@@ -2,6 +2,9 @@
 name = "jxlit"
 version = "0.1.0"
 requires-python = ">=3.10"
+dependencies = [
+    "numpy>=2.0",
+]
 classifiers = [
     "Programming Language :: Rust",
     "Programming Language :: Python :: Implementation :: CPython",
@@ -20,6 +23,7 @@ manifest-path = "Cargo.toml"
 [dependency-groups]
 dev = [
     "mypy>=1.0",
+    "pillow>=11.0",
     "pytest>=8.0",
     "ruff>=0.8",
 ]

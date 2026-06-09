@@ -10,4 +10,5 @@ crate-type = ["cdylib"]
 
 [dependencies]
 jxlit = { path = "../rust-jxlit" }
+numpy = "0.23"
 pyo3 = { version = "0.23", features = ["extension-module"] }

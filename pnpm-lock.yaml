@@ -9,6 +9,10 @@ importers:
   .: {}
 
   src/node-jxlit:
+    dependencies:
+      numpy-ts:
+        specifier: ^1.0.0
+        version: 1.4.0
     devDependencies:
       '@eslint/js':
         specifier: ^9.17.0
@@ -19,12 +23,18 @@ importers:
       '@types/node':
         specifier: ^22.10.2
         version: 22.19.20
+      '@types/pngjs':
+        specifier: ^6.0.5
+        version: 6.0.5
       eslint:
         specifier: ^9.17.0
         version: 9.39.4
       eslint-config-prettier:
         specifier: ^9.1.0
         version: 9.1.2(eslint@9.39.4)
+      pngjs:
+        specifier: ^7.0.0
+        version: 7.0.0
       prettier:
         specifier: ^3.4.2
         version: 3.8.4
@@ -46,12 +56,18 @@ importers:
       '@types/node':
         specifier: ^22.10.2
         version: 22.19.20
+      '@types/pngjs':
+        specifier: ^6.0.5
+        version: 6.0.5
       eslint:
         specifier: ^9.17.0
         version: 9.39.4
       eslint-config-prettier:
         specifier: ^9.1.0
         version: 9.1.2(eslint@9.39.4)
+      pngjs:
+        specifier: ^7.0.0
+        version: 7.0.0
       prettier:
         specifier: ^3.4.2
         version: 3.8.4
@@ -294,6 +310,9 @@ packages:
 
   '@types/node@22.19.20':
     resolution: {integrity: sha512-6tELRwSDYWW9EdZhbeZmYGZ1/7Djkt+Ah3/ScEYT9cDord7UJzasR/4D3VONg9tQI5CDp+/CZC1AXj2pCFOvpw==}
+
+  '@types/pngjs@6.0.5':
+    resolution: {integrity: sha512-0k5eKfrA83JOZPppLtS2C7OUtyNAl2wKNxfyYl9Q5g9lPkgBl/9hNyAu6HuEH2J4XmIv2znEpkDd0SaZVxW6iQ==}
 
   '@typescript-eslint/eslint-plugin@8.61.0':
     resolution: {integrity: sha512-bFNvl9ZczlVb+wR2Akszf3gHfKVj/8WanXaGJ3UstTA7brNKg0cNdk6X1Psu5V7MZ2oQtzZKOEzIUehaoxbDGw==}
@@ -600,6 +619,10 @@ packages:
   natural-compare@1.4.0:
     resolution: {integrity: sha512-OWND8ei3VtNC9h7V60qff3SVobHr996CTwgxubgyQYEpg290h9J0buyECNNJexkFm5sOajh5G116RYA1c8ZMSw==}
 
+  numpy-ts@1.4.0:
+    resolution: {integrity: sha512-r1iY0rLq7AgsTLhtzjaZrIMvs0xxIPfG+e+KoQj1yOFkNHjTAEROoQF3I6wCoyXwiN20NWkJCpLwxluR2t4mFg==}
+    engines: {node: '>=20.1.0'}
+
   optionator@0.9.4:
     resolution: {integrity: sha512-6IpQ7mKUxRcZNLIObR0hz7lxsapSSIYNZJwXPGeF0mTVqGKFIXj1DQcMoT22S3ROcLyY/rz0PWaWZ9ayWmad9g==}
     engines: {node: '>= 0.8.0'}
@@ -627,6 +650,10 @@ packages:
   picomatch@4.0.4:
     resolution: {integrity: sha512-QP88BAKvMam/3NxH6vj2o21R6MjxZUAd6nlwAS/pnGvN9IVLocLHxGYIzFhg6fUQ+5th6P4dv4eW9jX3DSIj7A==}
     engines: {node: '>=12'}
+
+  pngjs@7.0.0:
+    resolution: {integrity: sha512-LKWqWJRhstyYo9pGvgor/ivk2w94eSjE3RGVuzLGlr3NmD8bf7RcYGze1mNdEHRP6TRP6rMuDHk5t44hnTRyow==}
+    engines: {node: '>=14.19.0'}
 
   prelude-ls@1.2.1:
     resolution: {integrity: sha512-vkcDPrRZo1QZLbn5RLGPpg/WmIQ65qoWWhcGKf/b5eplkkarX0m9z8ppCat4mlOqUsWpyNuYgO3VRyrYHSzX5g==}
@@ -867,6 +894,10 @@ snapshots:
   '@types/node@22.19.20':
     dependencies:
       undici-types: 6.21.0
+
+  '@types/pngjs@6.0.5':
+    dependencies:
+      '@types/node': 22.19.20
 
   '@typescript-eslint/eslint-plugin@8.61.0(@typescript-eslint/parser@8.61.0(eslint@9.39.4)(typescript@5.9.3))(eslint@9.39.4)(typescript@5.9.3)':
     dependencies:
@@ -1214,6 +1245,8 @@ snapshots:
 
   natural-compare@1.4.0: {}
 
+  numpy-ts@1.4.0: {}
+
   optionator@0.9.4:
     dependencies:
       deep-is: 0.1.4
@@ -1240,6 +1273,8 @@ snapshots:
   path-key@3.1.1: {}
 
   picomatch@4.0.4: {}
+
+  pngjs@7.0.0: {}
 
   prelude-ls@1.2.1: {}
 

@@ -1,8 +1,32 @@
+from pathlib import Path
+
+import numpy as np
+from PIL import Image
+
 from jxlit import decode
 
+ASSETS_DIR = Path(__file__).resolve().parents[3] / "assets"
+JXL_FIXTURE = ASSETS_DIR / "colors_e1_d0p5_fd4.jxl"
+PNG_FIXTURE = ASSETS_DIR / "colors.png"
+MAE_TOLERANCE = 0.02
 
-def test_decode_returns_empty_buffer() -> None:
-    assert decode(b"not-a-jxl") == b""
+
+def load_png_rgb_f32(path: Path) -> np.ndarray:
+    image = Image.open(path).convert("RGB")
+    return np.asarray(image, dtype=np.float32) / 255.0
+
+
+def test_decode_colors_fixture_is_close_to_png() -> None:
+    decoded = decode(JXL_FIXTURE.read_bytes())
+    expected = load_png_rgb_f32(PNG_FIXTURE)
+
+    assert decoded.height == expected.shape[0]
+    assert decoded.width == expected.shape[1]
+    assert decoded.channels == expected.shape[2]
+    assert decoded.pixels.shape == expected.shape
+
+    mae = float(np.abs(decoded.pixels - expected).mean())
+    assert mae < MAE_TOLERANCE, f"mean absolute error {mae} exceeds {MAE_TOLERANCE}"
 
 
 def test_decode_rejects_non_bytes_like() -> None:

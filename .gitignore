@@ -3,6 +3,8 @@
 node_modules/
 src/python-jxlit/.venv/
 *.node
+*.so
+*.pyi
 dist/
 src/node-jxlit/binding.js
 src/node-jxlit/binding.d.ts

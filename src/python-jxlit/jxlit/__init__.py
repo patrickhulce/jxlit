@@ -1,3 +1,3 @@
-from jxlit._core import decode
+from jxlit._core import DecodedImage, decode
 
-__all__ = ["decode"]
+__all__ = ["DecodedImage", "decode"]
