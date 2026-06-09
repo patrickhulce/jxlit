@@ -7,7 +7,8 @@
 //! [`RenderedFrame`] directly and skip this stage.
 
 use jxl_image::{BitDepth, ExtraChannelType};
-use jxl_render::{ImageBuffer, Region};
+
+use crate::vendor::jxl_render::{ImageBuffer, Region};
 
 use super::render::RenderedFrame;
 use crate::{DecodeError, DecodedImage};

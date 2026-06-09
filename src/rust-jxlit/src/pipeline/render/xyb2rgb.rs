@@ -1,6 +1,19 @@
-//! Scaffolding placeholder: XYB -> RGB (output color) transform.
+//! Color-transform stage (XYB -> requested output encoding).
 //!
-//! In the current pipeline this happens inside
-//! `jxl_render::RenderContext::render_keyframe` (private `postprocess_keyframe`
-//! using `jxl-color`). It is the prime GPU-acceleration target and will move
-//! here once the renderer is forked to expose the pre-transform grids.
+//! Reproduces the keyframe color transform by driving the vendored
+//! `RenderContext::postprocess_keyframe`, which builds a `jxl_color`
+//! `ColorTransform` from the image metadata + requested encoding + embedded ICC
+//! and runs it (handling YCbCr->RGB and CMYK black inversion). This is the final
+//! stage of `render_keyframe` in our flow.
+
+use std::sync::Arc;
+
+use crate::vendor::jxl_render::{ImageWithRegion, IndexedFrame, RenderContext, Result};
+
+pub(crate) fn run(
+    ctx: &RenderContext,
+    frame: &IndexedFrame,
+    grid: Arc<ImageWithRegion>,
+) -> Result<Arc<ImageWithRegion>> {
+    ctx.postprocess_keyframe(frame, grid)
+}

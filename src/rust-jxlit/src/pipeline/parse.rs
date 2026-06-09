@@ -9,11 +9,12 @@
 use std::sync::Arc;
 
 use jxl_bitstream::{Bitstream, ContainerParser, ParseEvent};
-use jxl_frame::{Frame, FrameContext};
 use jxl_image::ImageHeader;
 use jxl_oxide_common::Bundle;
-use jxl_render::{Region, RenderContext};
 use jxl_threadpool::JxlThreadPool;
+
+use crate::vendor::jxl_frame::{Frame, FrameContext};
+use crate::vendor::jxl_render::{Region, RenderContext};
 
 use crate::DecodeError;
 

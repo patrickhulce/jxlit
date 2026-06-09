@@ -1,20 +1,28 @@
 [package]
 name = "jxlit"
 version.workspace = true
-edition.workspace = true
+# Overrides the workspace edition (2021): the vendored jxl-render/jxl-frame/
+# jxl-vardct sources are edition 2024 and compile as in-crate modules.
+edition = "2024"
 license.workspace = true
 
 [lib]
 crate-type = ["rlib"]
 
 [dependencies]
+# Direct deps used by our pipeline and by the vendored sub-crates (the vendored
+# jxl-render/jxl-frame/jxl-vardct live under src/vendor). Versions match the set
+# resolved in Cargo.lock that the vendored sources were copied against.
+bytemuck = "1.19"
 jxl-bitstream = "1.1"
+jxl-coding = "1.0"
 jxl-color = "0.11"
-jxl-frame = "0.13"
+jxl-grid = "0.6.2"
 jxl-image = "0.13"
+jxl-modular = "0.11.3"
 jxl-oxide-common = "1.0"
-jxl-render = "0.12"
 jxl-threadpool = "1.0"
+tracing = { version = "0.1", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 png = "0.17"

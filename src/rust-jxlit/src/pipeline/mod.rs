@@ -13,8 +13,10 @@
 //! per-tile rendering.
 
 pub mod interleave;
+pub mod modular;
 pub mod parse;
 pub mod render;
+pub mod vardct;
 
 use crate::{DecodeError, DecodedImage};
 

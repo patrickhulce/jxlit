@@ -150,23 +150,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "jxl-frame"
-version = "0.13.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2d967c6fd669c7c01060b5022d8835fa82fd46b06ffc98b549f17600a097c2b3"
-dependencies = [
- "jxl-bitstream",
- "jxl-coding",
- "jxl-grid",
- "jxl-image",
- "jxl-modular",
- "jxl-oxide-common",
- "jxl-threadpool",
- "jxl-vardct",
- "tracing",
-]
-
-[[package]]
 name = "jxl-grid"
 version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -211,26 +194,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "jxl-render"
-version = "0.12.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d34386bfdb6a19b5a30cc9beb4d475d537422c31ae8c39bb69640fcce3fcaf19"
-dependencies = [
- "bytemuck",
- "jxl-bitstream",
- "jxl-coding",
- "jxl-color",
- "jxl-frame",
- "jxl-grid",
- "jxl-image",
- "jxl-modular",
- "jxl-oxide-common",
- "jxl-threadpool",
- "jxl-vardct",
- "tracing",
-]
-
-[[package]]
 name = "jxl-threadpool"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -240,37 +203,25 @@ dependencies = [
 ]
 
 [[package]]
-name = "jxl-vardct"
-version = "0.11.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ce72a18c6d3a47172ab6c479be2bdb56f22066b5d7092663f03b4490820b4511"
+name = "jxlit"
+version = "0.2.0"
 dependencies = [
+ "bytemuck",
  "jxl-bitstream",
  "jxl-coding",
+ "jxl-color",
  "jxl-grid",
+ "jxl-image",
  "jxl-modular",
  "jxl-oxide-common",
  "jxl-threadpool",
+ "png",
  "tracing",
 ]
 
 [[package]]
-name = "jxlit"
-version = "0.1.0"
-dependencies = [
- "jxl-bitstream",
- "jxl-color",
- "jxl-frame",
- "jxl-image",
- "jxl-oxide-common",
- "jxl-render",
- "jxl-threadpool",
- "png",
-]
-
-[[package]]
 name = "jxlit_node_bindings"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "jxlit",
  "napi",
@@ -280,7 +231,7 @@ dependencies = [
 
 [[package]]
 name = "jxlit_python_bindings"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "jxlit",
  "numpy",
@@ -289,7 +240,7 @@ dependencies = [
 
 [[package]]
 name = "jxlit_wasm_bindings"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "jxlit",
  "wasm-bindgen",
