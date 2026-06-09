@@ -1,7 +1,8 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "module": "CommonJS",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
     "strict": true,
     "declaration": true,
     "outDir": "dist",
@@ -10,5 +11,5 @@
     "types": ["node"]
   },
   "include": ["src/**/*.ts"],
-  "exclude": ["node_modules", "dist"]
+  "exclude": ["node_modules", "dist", "pkg"]
 }

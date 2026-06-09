@@ -27,6 +27,12 @@ dev = [
 [tool.ruff]
 line-length = 88
 
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
 [tool.mypy]
 python_version = "3.10"
 strict = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

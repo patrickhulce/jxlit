@@ -1,7 +1,9 @@
-.PHONY: all build lint typecheck test \
+.PHONY: all build lint lint-fix typecheck test format \
         build-rust build-python build-node build-wasm \
-        lint-rust lint-python lint-node \
-        typecheck-python typecheck-node \
+        lint-rust lint-python lint-node lint-wasm \
+        lint-fix-rust lint-fix-python lint-fix-node lint-fix-wasm \
+        typecheck-python typecheck-node typecheck-wasm \
+        format-rust format-python format-node format-wasm \
         test-rust test-python test-node test-wasm
 
 all: build lint typecheck test
@@ -20,7 +22,7 @@ build-node:
 build-wasm:
 	pnpm --dir src/wasm-jxlit build
 
-lint: lint-rust lint-python lint-node
+lint: lint-rust lint-python lint-node lint-wasm
 
 lint-rust:
 	cargo fmt --all -- --check
@@ -28,17 +30,55 @@ lint-rust:
 
 lint-python:
 	cd src/python-jxlit && uv run ruff check .
+	cd src/python-jxlit && uv run ruff format --check .
 
 lint-node:
-	pnpm --dir src/node-jxlit exec prettier --check .
+	pnpm --dir src/node-jxlit lint
 
-typecheck: typecheck-python typecheck-node
+lint-wasm:
+	pnpm --dir src/wasm-jxlit lint
+
+lint-fix: lint-fix-rust lint-fix-python lint-fix-node lint-fix-wasm
+
+lint-fix-rust:
+	cargo fmt --all
+	cargo clippy --fix --allow-dirty --allow-staged \
+		-p jxlit -p jxlit_node_bindings -p jxlit_wasm_bindings -- -D warnings
+
+lint-fix-python:
+	cd src/python-jxlit && uv run ruff check --fix .
+	cd src/python-jxlit && uv run ruff format .
+
+lint-fix-node:
+	pnpm --dir src/node-jxlit lint:fix
+
+lint-fix-wasm:
+	pnpm --dir src/wasm-jxlit lint:fix
+
+typecheck: typecheck-python typecheck-node typecheck-wasm
 
 typecheck-python:
 	cd src/python-jxlit && uv run mypy jxlit tests
 
 typecheck-node:
-	pnpm --dir src/node-jxlit exec tsc --noEmit
+	pnpm --dir src/node-jxlit typecheck
+
+typecheck-wasm:
+	pnpm --dir src/wasm-jxlit typecheck
+
+format: format-rust format-python format-node format-wasm
+
+format-rust:
+	cargo fmt --all
+
+format-python:
+	cd src/python-jxlit && uv run ruff format .
+
+format-node:
+	pnpm --dir src/node-jxlit format
+
+format-wasm:
+	pnpm --dir src/wasm-jxlit format
 
 test: test-rust test-python test-node test-wasm
 

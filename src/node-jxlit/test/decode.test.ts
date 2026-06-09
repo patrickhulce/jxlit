@@ -1,6 +1,6 @@
-const { test } = require("node:test");
-const assert = require("node:assert/strict");
-const { decode } = require("../index.js");
+import { test } from "node:test";
+import * as assert from "node:assert/strict";
+import { decode } from "../dist/index.js";
 
 test("decode returns empty buffer", () => {
   const result = decode(Buffer.from("not-a-jxl"));

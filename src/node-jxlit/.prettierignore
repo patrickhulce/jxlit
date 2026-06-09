@@ -1,3 +1,4 @@
 binding.js
 binding.d.ts
+dist/
 *.node

@@ -16,8 +16,10 @@ The [Makefile](Makefile) is the primary interface:
 
 ```bash
 make              # build all targets
-make lint         # fmt, clippy, ruff, prettier
+make lint         # fmt, clippy, ruff, eslint, prettier
+make lint-fix     # auto-fix lint issues across all languages
 make typecheck    # mypy, tsc
+make format       # apply formatters across all languages
 make test         # run all tests
 make test-rust    # cargo test only
 make test-python  # pytest only
@@ -62,7 +64,7 @@ const pixels = decode(jxlBytes)
 ```text
 src/
 ├── rust-jxlit/          # language-agnostic core (std only)
-├── python-jxlit/        # PyO3 bindings + Python package
-├── node-jxlit/          # napi-rs bindings + npm package
-└── wasm-jxlit/          # wasm-bindgen bindings + npm package
+├── python-jxlit/        # PyO3 bindings + idiomatic Python package (jxlit/)
+├── node-jxlit/          # napi-rs bindings + TypeScript wrapper (src/ -> dist/)
+└── wasm-jxlit/          # wasm-bindgen bindings + TypeScript wrapper (src/ -> dist/)
 ```
