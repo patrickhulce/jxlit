@@ -16,6 +16,7 @@
     "build:ts": "tsc",
     "build": "pnpm run build:native && pnpm run build:ts",
     "build:debug": "napi build --cargo-name jxlit_node_bindings --platform --js binding.js --dts binding.d.ts && pnpm run build:ts",
+    "benchmark": "node --import tsx src/benchmark.ts",
     "test": "node --import tsx --test test/decode.test.ts",
     "lint": "eslint . && prettier --check .",
     "lint:fix": "eslint --fix . && prettier --write .",

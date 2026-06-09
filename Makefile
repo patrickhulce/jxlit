@@ -1,10 +1,16 @@
-.PHONY: all build lint lint-fix typecheck test format \
-        build-rust build-python build-node build-wasm \
+.PHONY: all build lint lint-fix typecheck test format benchmark \
+        build-rust build-python build-node build-wasm build-bench-rust \
         lint-rust lint-python lint-node lint-wasm \
         lint-fix-rust lint-fix-python lint-fix-node lint-fix-wasm \
         typecheck-python typecheck-node typecheck-wasm \
         format-rust format-python format-node format-wasm \
-        test-rust test-python test-node test-wasm
+        test-rust test-python test-node test-wasm \
+        benchmark-rust benchmark-python benchmark-node benchmark-wasm
+
+WORKERS ?= 1
+ITERATIONS ?= 100
+FILE ?= assets/colors_e1_d0p5_fd4.jxl
+BENCHMARK_ARGS = --workers $(WORKERS) --iterations $(ITERATIONS) --file $(FILE)
 
 all: build lint typecheck test
 
@@ -93,3 +99,21 @@ test-node: build-node
 
 test-wasm: build-wasm
 	pnpm --dir src/wasm-jxlit test
+
+build-bench-rust:
+	cargo build --release -p jxlit --bin jxlit-benchmark
+
+benchmark: build-bench-rust build-python build-node build-wasm
+	python3 scripts/benchmark.py $(BENCHMARK_ARGS)
+
+benchmark-rust: build-bench-rust
+	python3 scripts/benchmark.py $(BENCHMARK_ARGS) --langs rust
+
+benchmark-python: build-python
+	python3 scripts/benchmark.py $(BENCHMARK_ARGS) --langs python
+
+benchmark-node: build-node
+	python3 scripts/benchmark.py $(BENCHMARK_ARGS) --langs node
+
+benchmark-wasm: build-wasm
+	python3 scripts/benchmark.py $(BENCHMARK_ARGS) --langs wasm
