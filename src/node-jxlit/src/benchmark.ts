@@ -3,6 +3,7 @@ import { join, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
 
 import { decode } from "./index.js";
+import { printPhaseSummary, telemetryToJson } from "./telemetry.js";
 
 const WARMUP_DECODES = 3;
 const DEFAULT_ITERATIONS = 100;
@@ -32,6 +33,7 @@ interface BenchmarkResult {
   megapixels: number;
   decode_seconds: number;
   latency_ms: LatencyStats;
+  telemetry?: Record<string, unknown>;
 }
 
 interface Options {
@@ -39,6 +41,7 @@ interface Options {
   action: string;
   iterations: number;
   threads?: number;
+  noTelemetry: boolean;
 }
 
 function parseArgs(argv: string[]): Options {
@@ -46,6 +49,7 @@ function parseArgs(argv: string[]): Options {
   let action = "decode_cpu";
   let iterations = DEFAULT_ITERATIONS;
   let threads: number | undefined;
+  let noTelemetry = false;
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -66,6 +70,9 @@ function parseArgs(argv: string[]): Options {
         threads = Number.parseInt(value ?? "", 10);
         break;
       }
+      case "--no-telemetry":
+        noTelemetry = true;
+        break;
       default:
         console.error(`unknown argument: ${arg}`);
         process.exit(1);
@@ -86,7 +93,7 @@ function parseArgs(argv: string[]): Options {
     process.exit(1);
   }
 
-  return { file, action, iterations, threads };
+  return { file, action, iterations, threads, noTelemetry };
 }
 
 function percentile(sorted: number[], p: number): number {
@@ -150,6 +157,19 @@ function main(): void {
       max: sorted[sorted.length - 1],
     },
   };
+
+  if (!options.noTelemetry) {
+    const telemetryOptions = {
+      ...(decodeOptions ?? {}),
+      telemetry: true,
+    };
+    const telemetryDecode = decode(bytes, telemetryOptions);
+    const telemetry = telemetryDecode.metadata._jxlit.telemetry;
+    if (telemetry !== undefined) {
+      printPhaseSummary(telemetry, "node");
+      result.telemetry = telemetryToJson(telemetry);
+    }
+  }
 
   console.log(JSON.stringify(result));
 }

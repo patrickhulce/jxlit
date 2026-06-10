@@ -1,3 +1,17 @@
-from jxlit._core import DecodeOptions, DecodedImage, decode
+from jxlit._core import (
+    DecodeOptions,
+    DecodeTelemetry,
+    DecodedImage,
+    JxlitMeta,
+    Measure,
+    decode,
+)
 
-__all__ = ["DecodeOptions", "DecodedImage", "decode"]
+__all__ = [
+    "DecodeOptions",
+    "DecodeTelemetry",
+    "DecodedImage",
+    "JxlitMeta",
+    "Measure",
+    "decode",
+]

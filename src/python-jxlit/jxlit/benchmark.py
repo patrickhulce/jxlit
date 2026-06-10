@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 
 from jxlit import DecodeOptions, decode
+from jxlit._core import print_phase_summary, telemetry_to_dict
 
 WARMUP_DECODES = 3
 DEFAULT_ITERATIONS = 100
@@ -52,6 +53,11 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Thread count for decode (default: available CPU cores)",
     )
+    parser.add_argument(
+        "--no-telemetry",
+        action="store_true",
+        help="Disable post-loop phase telemetry collection",
+    )
     return parser.parse_args()
 
 
@@ -91,7 +97,7 @@ def main() -> None:
     decode_seconds = time.perf_counter() - decode_start
 
     sorted_latencies = sorted(latencies_ms)
-    result = {
+    result: dict[str, object] = {
         "lang": "python",
         "action": args.action,
         "iterations": args.iterations,
@@ -108,6 +114,15 @@ def main() -> None:
             "max": sorted_latencies[-1],
         },
     }
+
+    if not args.no_telemetry:
+        telemetry_options = DecodeOptions(threads=args.threads, telemetry=True)
+        telemetry_decode = decode(data, options=telemetry_options)
+        telemetry = telemetry_decode.metadata["_jxlit"].telemetry
+        if telemetry is not None:
+            print_phase_summary(telemetry, lang="python")
+            result["telemetry"] = telemetry_to_dict(telemetry)
+
     print(json.dumps(result))
 
 

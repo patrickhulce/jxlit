@@ -70,3 +70,36 @@ test("decode colors fixture is close to png", () => {
     `mean absolute error ${mae} exceeds ${MAE_TOLERANCE}`,
   );
 });
+
+test("decode metadata includes version", () => {
+  const decoded = decode(readFileSync(JXL_FIXTURE));
+  assert.ok(decoded.metadata._jxlit.version);
+  assert.equal(decoded.metadata._jxlit.telemetry, undefined);
+});
+
+test("decode telemetry collects measures", () => {
+  const decoded = decode(readFileSync(JXL_FIXTURE), { telemetry: true });
+  const telemetry = decoded.metadata._jxlit.telemetry;
+  assert.ok(telemetry);
+  assert.ok(telemetry.timebase > 0);
+  assert.ok(telemetry.totalNs > 0);
+  assert.ok(telemetry.measures.length > 0);
+  const names = new Set(telemetry.measures.map((measure) => measure.name));
+  assert.ok(names.has("node_decode"));
+  assert.ok(names.has("decode"));
+  assert.ok(names.has("parse"));
+  assert.ok(names.has("render"));
+
+  const outer = telemetry.measures.find(
+    (measure) => measure.name === "node_decode",
+  );
+  assert.ok(outer);
+  assert.equal(outer.startNs, 0);
+  assert.equal(outer.durationNs, telemetry.totalNs);
+
+  const innerDecode = telemetry.measures.find(
+    (measure) => measure.name === "decode",
+  );
+  assert.ok(innerDecode);
+  assert.ok(innerDecode.startNs > 0);
+});

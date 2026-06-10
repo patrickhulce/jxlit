@@ -15,6 +15,7 @@ use jxl_image::{BitDepth, ExtraChannelType};
 use crate::vendor::jxl_render::{ImageBuffer, Region};
 
 use crate::pipeline::render::frame::RenderedFrame;
+use crate::types::DecodeMetadata;
 use crate::{DecodeError, DecodedImage};
 
 struct SpotColor<'r> {
@@ -28,6 +29,7 @@ struct SpotColor<'r> {
 /// Computes the output layout, allocates the HWC buffer, runs [`run_interleave`]
 /// and wraps the result into a [`DecodedImage`].
 pub fn build_decoded_image(rendered: &RenderedFrame) -> Result<DecodedImage, DecodeError> {
+    let _interleave = crate::phase_guard!("interleave");
     let orientation = rendered.orientation;
     debug_assert!((1..=8).contains(&orientation));
 
@@ -140,6 +142,7 @@ pub fn build_decoded_image(rendered: &RenderedFrame) -> Result<DecodedImage, Dec
         width: width_us,
         channels,
         pixels,
+        metadata: DecodeMetadata::with_version(env!("CARGO_PKG_VERSION")),
     })
 }
 

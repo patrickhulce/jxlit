@@ -22,6 +22,7 @@ use crate::pipeline::structs::container::{ContainerCtx, ContainerDeclaration};
 ///
 /// Auxiliary boxes (Exif/XMP/jbrd) are ignored, matching the current decoder.
 pub fn read_codestream(input: &[u8]) -> Result<Vec<u8>, DecodeError> {
+    let _guard = crate::phase_guard!("read_codestream");
     let mut parser = ContainerParser::new();
     let mut codestream = Vec::new();
 
@@ -51,6 +52,7 @@ pub fn read_header(
     codestream: &[u8],
     pool: JxlThreadPool,
 ) -> Result<ContainerDeclaration, DecodeError> {
+    let _guard = crate::phase_guard!("read_header");
     let mut bitstream = Bitstream::new(codestream);
     let image_header =
         ImageHeader::parse(&mut bitstream, ()).map_err(|e| DecodeError::new(e.to_string()))?;
@@ -98,6 +100,7 @@ pub fn build_container_ctx(
     declaration: ContainerDeclaration,
     pool: JxlThreadPool,
 ) -> Result<ContainerCtx, DecodeError> {
+    let _guard = crate::phase_guard!("build_container_ctx");
     let mut builder = RenderContext::builder()
         .pool(pool)
         .force_wide_buffers(false);

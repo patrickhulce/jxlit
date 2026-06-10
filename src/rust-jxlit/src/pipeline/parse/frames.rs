@@ -24,6 +24,7 @@ pub fn read_frames(
     ctx: &mut RenderContext,
     frame_bytes: &[u8],
 ) -> std::result::Result<(), DecodeError> {
+    let _guard = crate::phase_guard!("read_frames");
     let mut buf = frame_bytes;
     while !buf.is_empty() {
         let mut bitstream = Bitstream::new(buf);

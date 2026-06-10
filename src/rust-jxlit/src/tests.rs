@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use crate::decode;
+use crate::{DecodeOptions, decode, decode_with_options};
 
 fn assets_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -67,4 +67,54 @@ fn decode_colors_fixture_is_close_to_png() {
         mae < 0.02,
         "mean absolute error {mae} exceeds tolerance 0.02"
     );
+}
+
+#[test]
+fn decode_metadata_includes_version() {
+    let assets = assets_dir();
+    let jxl_path = assets.join("colors_e1_d0p5_fd4.jxl");
+    let jxl_bytes = fs::read(&jxl_path).expect("read jxl fixture");
+
+    let decoded = decode(&jxl_bytes).expect("decode jxl fixture");
+    assert_eq!(
+        decoded.metadata.jxlit.version,
+        env!("CARGO_PKG_VERSION")
+    );
+    assert!(decoded.metadata.jxlit.telemetry.is_none());
+}
+
+#[test]
+fn decode_telemetry_collects_flat_measures() {
+    let assets = assets_dir();
+    let jxl_path = assets.join("colors_e1_d0p5_fd4.jxl");
+    let jxl_bytes = fs::read(&jxl_path).expect("read jxl fixture");
+
+    let decoded = decode_with_options(
+        &jxl_bytes,
+        &DecodeOptions {
+            telemetry: true,
+            ..DecodeOptions::default()
+        },
+    )
+    .expect("decode jxl fixture");
+
+    let telemetry = decoded
+        .metadata
+        .jxlit
+        .telemetry
+        .as_ref()
+        .expect("telemetry enabled");
+    assert!(telemetry.rust_timebase > 0);
+    assert!(telemetry.total_ns > 0);
+    assert!(!telemetry.measures.is_empty());
+
+    let names: Vec<_> = telemetry.measures.iter().map(|m| m.name).collect();
+    assert!(names.contains(&"decode"));
+    assert!(names.contains(&"parse"));
+    assert!(names.contains(&"render"));
+
+    for measure in &telemetry.measures {
+        assert!(measure.duration_ns > 0);
+        assert!(measure.start_ns <= telemetry.total_ns);
+    }
 }

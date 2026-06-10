@@ -2,9 +2,9 @@ use std::env;
 use std::fs;
 use std::path::PathBuf;
 use std::process;
-use std::time::Instant;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use jxlit::{DecodeOptions, decode_with_options};
+use jxlit::{DecodeOptions, RebasingTelemetry, decode_with_options, rebase_telemetry};
 
 const WARMUP_DECODES: usize = 3;
 const DEFAULT_ITERATIONS: usize = 100;
@@ -15,6 +15,14 @@ struct Options {
     action: String,
     iterations: usize,
     threads: Option<usize>,
+    no_telemetry: bool,
+}
+
+fn unix_time_ns() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos() as u64
 }
 
 fn parse_args() -> Options {
@@ -22,6 +30,7 @@ fn parse_args() -> Options {
     let mut action: Option<String> = None;
     let mut iterations = DEFAULT_ITERATIONS;
     let mut threads: Option<usize> = None;
+    let mut no_telemetry = false;
     let mut args = env::args().skip(1);
 
     while let Some(arg) = args.next() {
@@ -58,6 +67,7 @@ fn parse_args() -> Options {
                     process::exit(1);
                 }));
             }
+            "--no-telemetry" => no_telemetry = true,
             other => {
                 eprintln!("unknown argument: {other}");
                 process::exit(1);
@@ -83,6 +93,7 @@ fn parse_args() -> Options {
         action,
         iterations,
         threads,
+        no_telemetry,
     }
 }
 
@@ -119,6 +130,56 @@ fn resolve_file(path: &str) -> PathBuf {
     candidate
 }
 
+fn print_phase_summary(telemetry: &RebasingTelemetry, lang: &str, top_n: usize) {
+    let outer = telemetry
+        .measures
+        .iter()
+        .find(|measure| measure.name.ends_with("_decode"));
+    let total_ns = outer.map(|m| m.duration_ns).unwrap_or(telemetry.total_ns);
+    let mut ranked: Vec<_> = telemetry.measures.iter().collect();
+    ranked.sort_by_key(|measure| std::cmp::Reverse(measure.duration_ns));
+    ranked.truncate(top_n);
+
+    eprintln!("\n== phase breakdown ({lang}) ==");
+    for measure in ranked {
+        let ms = measure.duration_ns as f64 / 1_000_000.0;
+        let pct = if total_ns > 0 {
+            100.0 * measure.duration_ns as f64 / total_ns as f64
+        } else {
+            0.0
+        };
+        eprintln!(
+            "{:<16} {:>8.2}ms {:>6.1}%",
+            measure.name, ms, pct
+        );
+    }
+}
+
+fn json_escape(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+fn telemetry_to_json(telemetry: &RebasingTelemetry) -> String {
+    let measures: Vec<String> = telemetry
+        .measures
+        .iter()
+        .map(|measure| {
+            format!(
+                "{{\"name\":\"{}\",\"start_ns\":{},\"duration_ns\":{}}}",
+                json_escape(&measure.name),
+                measure.start_ns,
+                measure.duration_ns
+            )
+        })
+        .collect();
+    format!(
+        "{{\"timebase\":{},\"total_ns\":{},\"measures\":[{}]}}",
+        telemetry.timebase,
+        telemetry.total_ns,
+        measures.join(",")
+    )
+}
+
 fn main() {
     let options = parse_args();
     let file_path = resolve_file(&options.file);
@@ -130,6 +191,7 @@ fn main() {
 
     let decode_options = DecodeOptions {
         threads: options.threads,
+        ..DecodeOptions::default()
     };
 
     let warmup = decode_with_options(&bytes, &decode_options).unwrap_or_else(|e| {
@@ -171,8 +233,35 @@ fn main() {
     let min = sorted[0];
     let max = sorted[sorted.len() - 1];
 
+    let telemetry_json = if options.no_telemetry {
+        String::new()
+    } else {
+        let telemetry_options = DecodeOptions {
+            threads: options.threads,
+            telemetry: true,
+        };
+        let timebase = unix_time_ns();
+        let wall_start = Instant::now();
+        let telemetry_decode =
+            decode_with_options(&bytes, &telemetry_options).unwrap_or_else(|e| {
+                eprintln!("telemetry decode failed: {e}");
+                process::exit(1);
+            });
+        let wall_ns = wall_start.elapsed().as_nanos() as u64;
+        let native = telemetry_decode
+            .metadata
+            .jxlit
+            .telemetry
+            .as_ref()
+            .expect("telemetry decode must return telemetry");
+        std::hint::black_box(&telemetry_decode);
+        let rebased = rebase_telemetry(native, timebase, "rust_decode", wall_ns);
+        print_phase_summary(&rebased, "rust", 10);
+        format!(",\"telemetry\":{}", telemetry_to_json(&rebased))
+    };
+
     println!(
-        "{{\"lang\":\"rust\",\"action\":\"{}\",\"iterations\":{},\"width\":{},\"height\":{},\"channels\":{},\"megapixels\":{:.6},\"decode_seconds\":{:.6},\"latency_ms\":{{\"mean\":{:.3},\"p50\":{:.3},\"p95\":{:.3},\"min\":{:.3},\"max\":{:.3}}}}}",
+        "{{\"lang\":\"rust\",\"action\":\"{}\",\"iterations\":{},\"width\":{},\"height\":{},\"channels\":{},\"megapixels\":{:.6},\"decode_seconds\":{:.6},\"latency_ms\":{{\"mean\":{:.3},\"p50\":{:.3},\"p95\":{:.3},\"min\":{:.3},\"max\":{:.3}}}{}}}",
         options.action,
         options.iterations,
         width,
@@ -185,5 +274,6 @@ fn main() {
         p95,
         min,
         max,
+        telemetry_json,
     );
 }

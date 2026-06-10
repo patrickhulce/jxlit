@@ -27,6 +27,10 @@ jxl-modular = "0.11.3"
 jxl-oxide-common = "1.0"
 jxl-threadpool = { version = "1.0", default-features = false }
 tracing = { version = "0.1", default-features = false, features = ["std"] }
+web-time = "1"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = "0.3"
 
 [dev-dependencies]
 png = "0.17"

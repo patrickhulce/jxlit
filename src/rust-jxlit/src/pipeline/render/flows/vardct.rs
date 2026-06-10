@@ -28,6 +28,7 @@ pub fn run_vardct_flow<S: Sample>(
     region: Region,
     pool: &JxlThreadPool,
 ) -> Result<ImageWithRegion> {
+    let _vardct_flow = crate::phase_guard!("vardct_flow");
     let image_header = frame.image_header();
     let frame_header = frame.header();
     let tracker = frame.alloc_tracker();
@@ -39,6 +40,7 @@ pub fn run_vardct_flow<S: Sample>(
     let low_frequency_global = match &cache.lf_global {
         Some(x) if !x.gmodular.is_partial() => x,
         _ => {
+            let _read_lf_global = crate::phase_guard!("read_lf_global");
             let low_frequency_global = parse::frames::read_low_frequency_global(frame)?;
             cache.lf_global = Some(low_frequency_global);
             cache.lf_global.as_ref().unwrap()
@@ -122,27 +124,33 @@ pub fn run_vardct_flow<S: Sample>(
             });
         }
 
-        let low_frequency_image = render::frame::build_low_frequency_image(
-            frame,
-            low_frequency_global,
-            low_frequency_groups_mut,
-            lf_group_image,
-            modular_lf_region,
-            lf_frame,
-            low_frequency_global_vardct,
-            subsampled,
-            pool,
-        )?;
+        let low_frequency_image = {
+            let _build_lf_image = crate::phase_guard!("build_lf_image");
+            render::frame::build_low_frequency_image(
+                frame,
+                low_frequency_global,
+                low_frequency_groups_mut,
+                lf_group_image,
+                modular_lf_region,
+                lf_frame,
+                low_frequency_global_vardct,
+                subsampled,
+                pool,
+            )?
+        };
 
         Ok(low_frequency_image)
     })?;
     result.into_inner().unwrap()?;
 
-    let mut color_buffer = render::frame::build_coefficient_buffer(
-        frame_header,
-        frame_declaration.modular_region,
-        tracker,
-    )?;
+    let mut color_buffer = {
+        let _build_coefficient_buffer = crate::phase_guard!("build_coefficient_buffer");
+        render::frame::build_coefficient_buffer(
+            frame_header,
+            frame_declaration.modular_region,
+            tracker,
+        )?
+    };
 
     let high_frequency_global = cache.hf_global.as_ref();
     let low_frequency_groups = &cache.lf_groups;
@@ -156,6 +164,7 @@ pub fn run_vardct_flow<S: Sample>(
 
     // Per-tile ANS decode (inline pass-group loop).
     (|| -> Result<()> {
+        let _tile_entropy = crate::phase_guard!("tile_entropy");
         let Some(high_frequency_global) = high_frequency_global else {
             return Ok(());
         };
@@ -243,11 +252,15 @@ pub fn run_vardct_flow<S: Sample>(
         group_dim: frame_declaration.group_dim,
         subsampled: frame_declaration.subsampled,
     };
-    pool.for_each_vec(tiles, |tile| {
-        render::tile::render_tile(&frame_ctx, tile);
-    });
+    {
+        let _tile_transform = crate::phase_guard!("tile_transform");
+        pool.for_each_vec(tiles, |tile| {
+            render::tile::render_tile(&frame_ctx, tile);
+        });
+    }
 
     if let Some(modular_image) = modular_image {
+        let _finish_modular = crate::phase_guard!("finish_modular");
         modular_image.prepare_subimage().unwrap().finish(pool);
         color_buffer.extend_from_gmodular(gmodular);
     }

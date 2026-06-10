@@ -1,9 +1,30 @@
 import * as np from "numpy-ts";
+import { hrtime } from "node:process";
 
 import { decode as decodeNative } from "../binding.js";
+import type { DecodeMetadata as DecodeMetadataNative } from "../binding.js";
+import {
+  rebaseTelemetry,
+  unixTimeNs,
+  type DecodeTelemetry,
+  type Measure,
+  type NativeDecodeTelemetry,
+} from "./telemetry.js";
 
 export interface DecodeOptions {
   threads?: number;
+  telemetry?: boolean;
+}
+
+export type { DecodeTelemetry, Measure };
+
+export interface JxlitMeta {
+  version: string;
+  telemetry?: DecodeTelemetry;
+}
+
+export interface DecodeMetadata {
+  _jxlit: JxlitMeta;
 }
 
 export interface DecodedImage {
@@ -11,6 +32,39 @@ export interface DecodedImage {
   width: number;
   channels: number;
   pixels: np.NDArray;
+  metadata: DecodeMetadata;
+}
+
+function metadataFromNative(metadata: DecodeMetadataNative): DecodeMetadata {
+  return {
+    _jxlit: {
+      version: metadata._jxlit.version,
+      telemetry: undefined,
+    },
+  };
+}
+
+function rebaseMetadata(
+  metadata: DecodeMetadataNative,
+  timebase: number,
+  wallNs: number,
+): DecodeMetadata {
+  const nativeTelemetry = metadata._jxlit.telemetry as NativeDecodeTelemetry | undefined;
+  if (nativeTelemetry === undefined) {
+    return metadataFromNative(metadata);
+  }
+  const telemetry = rebaseTelemetry(
+    nativeTelemetry,
+    timebase,
+    wallNs,
+    "node_decode",
+  );
+  return {
+    _jxlit: {
+      version: metadata._jxlit.version,
+      telemetry,
+    },
+  };
 }
 
 /**
@@ -20,15 +74,26 @@ export interface DecodedImage {
  * `binding.js` and should not be imported directly.
  */
 export function decode(input: Buffer, options?: DecodeOptions): DecodedImage {
+  const telemetry = options?.telemetry === true;
+  const timebase = telemetry ? unixTimeNs() : 0;
+  const start = telemetry ? hrtime.bigint() : 0n;
+
   const decoded = decodeNative(input, options);
+  const wallNs = telemetry ? hrtime.bigint() - start : 0n;
+
   const pixels = np
     .array(decoded.pixels, "float32")
     .reshape(decoded.height, decoded.width, decoded.channels);
+
+  const metadata = telemetry
+    ? rebaseMetadata(decoded.metadata, timebase, Number(wallNs))
+    : metadataFromNative(decoded.metadata);
 
   return {
     height: decoded.height,
     width: decoded.width,
     channels: decoded.channels,
     pixels,
+    metadata,
   };
 }

@@ -45,6 +45,7 @@ pub fn render_frame(
     container: &ContainerCtx,
     keyframe_index: usize,
 ) -> std::result::Result<DecodedImage, DecodeError> {
+    let _render = crate::phase_guard!("render");
     let ctx = &container.render_context;
     let image_header = container.declaration.image_header.as_ref();
 
@@ -84,6 +85,7 @@ pub fn render_frame(
 /// `render_by_index` + `postprocess_keyframe`: decode the color buffer, inject
 /// it into the vendored blend machinery, then run the color transform.
 fn render_keyframe_image(ctx: &RenderContext, idx: usize) -> Result<Arc<ImageWithRegion>> {
+    let _render_keyframe = crate::phase_guard!("render_keyframe");
     let frame = &ctx.frames()[idx];
     let image_region = ctx.requested_image_region();
     let frame_visibility = ctx.get_previous_frames_visibility(frame);
@@ -113,7 +115,11 @@ fn render_keyframe_image(ctx: &RenderContext, idx: usize) -> Result<Arc<ImageWit
         )?
     };
 
-    let blended = run_blend(ctx, idx, grid)?;
+    let blended = {
+        let _blend = crate::phase_guard!("blend");
+        run_blend(ctx, idx, grid)?
+    };
+    let _xyb2rgb = crate::phase_guard!("xyb2rgb");
     process::xyb2rgb::run_xyb2rgb(ctx, frame, blended)
 }
 
@@ -128,6 +134,7 @@ fn decode_color_buffer<S: Sample>(
     pool: &JxlThreadPool,
     frame_visibility: (usize, usize),
 ) -> Result<ImageWithRegion> {
+    let _decode_color_buffer = crate::phase_guard!("decode_color_buffer");
     let image_header = frame.image_header();
     let frame_header = frame.header();
 
@@ -162,6 +169,7 @@ fn decode_color_buffer<S: Sample>(
     };
 
     if frame_header.do_ycbcr {
+        let _jpeg_upsample = crate::phase_guard!("jpeg_upsample");
         process::upsample::run_jpeg_upsample(
             &mut fb,
             color_padded_region,
@@ -170,32 +178,42 @@ fn decode_color_buffer<S: Sample>(
     }
 
     let color_channels = fb.color_channels();
-    process::filters::run_loop_filters(
-        frame,
-        &mut fb,
-        color_padded_region,
-        &cache.lf_groups,
-        pool,
-    )?;
+    {
+        let _loop_filters = crate::phase_guard!("loop_filters");
+        process::filters::run_loop_filters(
+            frame,
+            &mut fb,
+            color_padded_region,
+            &cache.lf_groups,
+            pool,
+        )?;
+    }
     fb.remove_color_channels(color_channels);
     fb.prepare_color_upsampling(frame_header);
-    process::features::run_features(
-        frame,
-        &mut fb,
-        upsampling_valid_region,
-        reference_frames.refs.clone(),
-        cache.lf_global.as_ref(),
-        frame_visibility.0,
-        frame_visibility.1,
-        pool,
-    )?;
-    process::upsample::run_nonseparable_upsample(
-        &mut fb,
-        image_header,
-        frame_header,
-        upsampling_valid_region,
-    )?;
+    {
+        let _features = crate::phase_guard!("features");
+        process::features::run_features(
+            frame,
+            &mut fb,
+            upsampling_valid_region,
+            reference_frames.refs.clone(),
+            cache.lf_global.as_ref(),
+            frame_visibility.0,
+            frame_visibility.1,
+            pool,
+        )?;
+    }
+    {
+        let _nonsep_upsample = crate::phase_guard!("nonsep_upsample");
+        process::upsample::run_nonseparable_upsample(
+            &mut fb,
+            image_header,
+            frame_header,
+            upsampling_valid_region,
+        )?;
+    }
     if !frame_header.save_before_ct && !frame_header.is_last {
+        let _color_for_record = crate::phase_guard!("color_for_record");
         process::xyb2rgb::run_color_for_record(image_header, frame_header.do_ycbcr, &mut fb, pool)?;
     }
 

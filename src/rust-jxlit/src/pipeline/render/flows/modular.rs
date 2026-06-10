@@ -19,5 +19,6 @@ pub fn run_modular_flow<S: Sample>(
     region: Region,
     pool: &JxlThreadPool,
 ) -> Result<ImageWithRegion> {
+    let _modular_flow = crate::phase_guard!("modular_flow");
     modular::render_modular(frame, cache, region, pool)
 }

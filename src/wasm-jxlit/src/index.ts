@@ -3,9 +3,29 @@ import {
   DecodeOptions as DecodeOptionsNative,
 } from "../pkg/jxlit_wasm_bindings.js";
 
+import {
+  rebaseTelemetry,
+  unixTimeNs,
+  type DecodeTelemetry,
+  type Measure,
+  type NativeDecodeTelemetry,
+} from "./telemetry.js";
+
 export interface DecodeOptions {
   /** Ignored on WASM; threading is not available in this build. */
   threads?: number;
+  telemetry?: boolean;
+}
+
+export type { DecodeTelemetry, Measure };
+
+export interface JxlitMeta {
+  version: string;
+  telemetry?: DecodeTelemetry;
+}
+
+export interface DecodeMetadata {
+  _jxlit: JxlitMeta;
 }
 
 export interface DecodedImage {
@@ -13,6 +33,49 @@ export interface DecodedImage {
   width: number;
   channels: number;
   pixels: Float32Array;
+  metadata: DecodeMetadata;
+}
+
+function metadataFromNative(metadata: {
+  _jxlit: {
+    version: string;
+    telemetry?: NativeDecodeTelemetry;
+  };
+}): DecodeMetadata {
+  return {
+    _jxlit: {
+      version: metadata._jxlit.version,
+      telemetry: undefined,
+    },
+  };
+}
+
+function rebaseMetadata(
+  metadata: {
+    _jxlit: {
+      version: string;
+      telemetry?: NativeDecodeTelemetry;
+    };
+  },
+  timebase: number,
+  wallNs: number,
+): DecodeMetadata {
+  const nativeTelemetry = metadata._jxlit.telemetry;
+  if (nativeTelemetry === undefined) {
+    return metadataFromNative(metadata);
+  }
+  const telemetry = rebaseTelemetry(
+    nativeTelemetry,
+    timebase,
+    wallNs,
+    "wasm_decode",
+  );
+  return {
+    _jxlit: {
+      version: metadata._jxlit.version,
+      telemetry,
+    },
+  };
 }
 
 /**
@@ -25,20 +88,38 @@ export function decode(
   input: Uint8Array,
   options?: DecodeOptions,
 ): DecodedImage {
+  const telemetry = options?.telemetry === true;
   const nativeOptions =
     options === undefined
       ? undefined
-      : new DecodeOptionsNative(options.threads ?? undefined);
+      : new DecodeOptionsNative(
+          options.threads ?? undefined,
+          options.telemetry ?? false,
+        );
+
+  const timebase = telemetry ? unixTimeNs() : 0;
+  const start = telemetry ? performance.now() : 0;
 
   const decoded = decodeNative(input, nativeOptions);
+  const wallNs = telemetry
+    ? Math.trunc((performance.now() - start) * 1_000_000)
+    : 0;
 
-  const result: DecodedImage = {
-    height: decoded.height,
-    width: decoded.width,
-    channels: decoded.channels,
-    pixels: decoded.pixels,
-  };
+  const height = decoded.height;
+  const width = decoded.width;
+  const channels = decoded.channels;
+  const pixels = new Float32Array(decoded.pixels);
+  const metadata = telemetry
+    ? rebaseMetadata(decoded.metadata, timebase, wallNs)
+    : metadataFromNative(decoded.metadata);
 
   decoded.free();
-  return result;
+
+  return {
+    height,
+    width,
+    channels,
+    pixels,
+    metadata,
+  };
 }

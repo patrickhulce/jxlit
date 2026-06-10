@@ -33,6 +33,7 @@ class WorkerResult:
     megapixels: float
     decode_seconds: float
     latency_ms: dict[str, float]
+    telemetry: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -92,6 +93,11 @@ def parse_args() -> argparse.Namespace:
         default=",".join(DEFAULT_LANGS),
         help="Comma-separated languages to benchmark",
     )
+    parser.add_argument(
+        "--no-telemetry",
+        action="store_true",
+        help="Disable post-loop phase telemetry collection",
+    )
     return parser.parse_args()
 
 
@@ -108,6 +114,7 @@ def percentile(values: list[float], p: float) -> float:
 
 
 def parse_worker_result(payload: dict[str, Any]) -> WorkerResult:
+    telemetry = payload.get("telemetry")
     return WorkerResult(
         lang=str(payload["lang"]),
         action=str(payload["action"]),
@@ -118,6 +125,7 @@ def parse_worker_result(payload: dict[str, Any]) -> WorkerResult:
         megapixels=float(payload["megapixels"]),
         decode_seconds=float(payload["decode_seconds"]),
         latency_ms={key: float(value) for key, value in payload["latency_ms"].items()},
+        telemetry=telemetry if isinstance(telemetry, dict) else None,
     )
 
 
@@ -127,6 +135,7 @@ def build_command(
     action: str,
     iterations: int,
     threads: int | None,
+    no_telemetry: bool,
 ) -> list[str]:
     common = [
         "--file",
@@ -138,6 +147,8 @@ def build_command(
     ]
     if threads is not None:
         common.extend(["--threads", str(threads)])
+    if no_telemetry:
+        common.append("--no-telemetry")
 
     if lang == "rust":
         binary = REPO_ROOT / "target" / "release" / "jxlit-benchmark"
@@ -168,8 +179,9 @@ def run_worker(
     action: str,
     iterations: int,
     threads: int | None,
+    no_telemetry: bool,
 ) -> WorkerResult:
-    command = build_command(lang, file_path, action, iterations, threads)
+    command = build_command(lang, file_path, action, iterations, threads, no_telemetry)
     if lang == "python":
         cwd = REPO_ROOT / "src" / "python-jxlit"
     elif lang in {"node", "wasm"}:
@@ -268,20 +280,30 @@ def run_language_batch(
     iterations: int,
     workers: int,
     threads: int | None,
-) -> LanguageSummary:
+    no_telemetry: bool,
+) -> tuple[LanguageSummary, dict[str, Any] | None]:
     batch_start = time.perf_counter()
     results: list[WorkerResult] = []
 
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = [
-            executor.submit(run_worker, lang, file_path, action, iterations, threads)
+            executor.submit(
+                run_worker,
+                lang,
+                file_path,
+                action,
+                iterations,
+                threads,
+                no_telemetry,
+            )
             for _ in range(workers)
         ]
         for future in as_completed(futures):
             results.append(future.result())
 
     batch_wall_seconds = time.perf_counter() - batch_start
-    return aggregate_language(lang, workers, results, batch_wall_seconds)
+    telemetry = next((result.telemetry for result in results if result.telemetry), None)
+    return aggregate_language(lang, workers, results, batch_wall_seconds), telemetry
 
 
 def format_float(value: float, digits: int = 2) -> str:
@@ -325,6 +347,43 @@ def print_language_summary(summary: LanguageSummary) -> None:
         f"wall_seconds={format_float(summary.batch_wall_seconds)} "
         f"overhead={format_percent(summary.overhead)}"
     )
+
+
+def print_phase_summary(
+    lang: str,
+    telemetry: dict[str, Any],
+    top_n: int = 10,
+) -> None:
+    measures = telemetry.get("measures")
+    if not isinstance(measures, list) or not measures:
+        return
+
+    outer = next(
+        (
+            measure
+            for measure in measures
+            if isinstance(measure, dict)
+            and str(measure.get("name", "")).endswith("_decode")
+        ),
+        None,
+    )
+    total_ns = int(outer["duration_ns"]) if isinstance(outer, dict) else int(
+        telemetry.get("total_ns", 0)
+    )
+
+    ranked = sorted(
+        (measure for measure in measures if isinstance(measure, dict)),
+        key=lambda measure: int(measure.get("duration_ns", 0)),
+        reverse=True,
+    )[:top_n]
+
+    print(f"\n== phase breakdown ({lang}) ==")
+    for measure in ranked:
+        name = str(measure.get("name", ""))
+        duration_ns = int(measure.get("duration_ns", 0))
+        ms = duration_ns / 1_000_000.0
+        pct = 100.0 * duration_ns / total_ns if total_ns else 0.0
+        print(f"{name:<16} {ms:8.2f}ms {pct:6.1f}%")
 
 
 def print_cross_language_table(summaries: list[LanguageSummary]) -> None:
@@ -380,19 +439,29 @@ def main() -> None:
     )
 
     summaries: list[LanguageSummary] = []
+    telemetry_by_lang: dict[str, dict[str, Any]] = {}
     for lang in langs:
-        summary = run_language_batch(
+        summary, telemetry = run_language_batch(
             lang=lang,
             file_path=file_path,
             action=args.action,
             iterations=args.iterations,
             workers=args.workers,
             threads=args.threads,
+            no_telemetry=args.no_telemetry,
         )
         summaries.append(summary)
         print_language_summary(summary)
+        if telemetry is not None:
+            telemetry_by_lang[lang] = telemetry
 
     print_cross_language_table(summaries)
+
+    if not args.no_telemetry:
+        for lang in langs:
+            telemetry = telemetry_by_lang.get(lang)
+            if telemetry is not None:
+                print_phase_summary(lang, telemetry)
 
 
 if __name__ == "__main__":
