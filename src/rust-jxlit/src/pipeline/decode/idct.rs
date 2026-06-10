@@ -3,8 +3,7 @@
 //! Consumes the dequantized coefficients from [`super::dequant`] and applies the
 //! per-varblock inverse transform (adding back the LF coefficients), writing
 //! pixel-domain XYB samples in place. Delegates to the vendored `jxl-render`
-//! `transform_with_lf_grouped` (which dispatches to the SIMD/generic
-//! `transform_varblocks` implementations).
+//! `transform_with_lf_grouped`.
 
 use std::collections::HashMap;
 
@@ -15,14 +14,20 @@ use crate::vendor::jxl_frame::FrameHeader;
 use crate::vendor::jxl_frame::data::LfGroup;
 use crate::vendor::jxl_render::{ImageWithRegion, vardct};
 
-/// Applies the inverse DCT to a single group, combining the dequantized HF
+/// Applies the inverse DCT to a single tile, combining the dequantized HF
 /// coefficients with the LF image.
-pub(crate) fn transform_group<S: Sample>(
-    lf_xyb: &ImageWithRegion,
-    grid_xyb: &mut [MutableSubgrid<'_, f32>; 3],
-    group_idx: u32,
+pub fn run_inverse_dct<S: Sample>(
+    low_frequency_image: &ImageWithRegion,
+    xyb_coefficients: &mut [MutableSubgrid<'_, f32>; 3],
+    group_index: u32,
     frame_header: &FrameHeader,
-    lf_groups: &HashMap<u32, LfGroup<S>>,
+    low_frequency_groups: &HashMap<u32, LfGroup<S>>,
 ) {
-    vardct::transform_with_lf_grouped(lf_xyb, grid_xyb, group_idx, frame_header, lf_groups);
+    vardct::transform_with_lf_grouped(
+        low_frequency_image,
+        xyb_coefficients,
+        group_index,
+        frame_header,
+        low_frequency_groups,
+    );
 }

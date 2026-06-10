@@ -1,16 +1,20 @@
-//! Interleave stage: planar [`RenderedFrame`] -> interleaved (HWC) f32 buffer.
+//! Interleave post-decode step: planar [`RenderedFrame`] -> interleaved (HWC)
+//! `f32` buffer.
 //!
-//! This is a direct port of `jxl-oxide`'s `ImageStream` (`from_render` +
-//! `write_to_buffer::<f32>`): it selects color channels, then the black channel
-//! (for CMYK), then alpha, applies spot-color mixing, and maps coordinates
-//! through the image orientation. A future CHW planar dump can read
-//! [`RenderedFrame`] directly and skip this stage.
+//! `run_interleave` is the transform: it selects color channels, then the black
+//! channel (for CMYK), then alpha, applies spot-color mixing, and maps
+//! coordinates through the image orientation, writing samples into an HWC `f32`
+//! buffer. `build_decoded_image` computes the output layout, allocates the
+//! buffer, runs the transform and wraps the result into a [`DecodedImage`].
+//!
+//! Direct port of `jxl-oxide`'s `ImageStream` (`from_render` +
+//! `write_to_buffer::<f32>`).
 
 use jxl_image::{BitDepth, ExtraChannelType};
 
 use crate::vendor::jxl_render::{ImageBuffer, Region};
 
-use super::render::RenderedFrame;
+use crate::pipeline::render::frame::RenderedFrame;
 use crate::{DecodeError, DecodedImage};
 
 struct SpotColor<'r> {
@@ -21,8 +25,9 @@ struct SpotColor<'r> {
     solidity: f32,
 }
 
-/// Interleaves a rendered keyframe into an HWC `f32` buffer.
-pub fn interleave(rendered: &RenderedFrame) -> Result<DecodedImage, DecodeError> {
+/// Computes the output layout, allocates the HWC buffer, runs [`run_interleave`]
+/// and wraps the result into a [`DecodedImage`].
+pub fn build_decoded_image(rendered: &RenderedFrame) -> Result<DecodedImage, DecodeError> {
     let orientation = rendered.orientation;
     debug_assert!((1..=8).contains(&orientation));
 
@@ -112,6 +117,49 @@ pub fn interleave(rendered: &RenderedFrame) -> Result<DecodedImage, DecodeError>
     let height_us = height as usize;
     let mut pixels = vec![0.0f32; width_us * height_us * channels];
 
+    let count = run_interleave(
+        &mut pixels,
+        &grids,
+        &bit_depth,
+        &start_offset_xy,
+        &spot_colors,
+        orientation,
+        width,
+        height,
+    );
+
+    if count != pixels.len() {
+        return Err(DecodeError::new(format!(
+            "expected to write {} samples, wrote {count}",
+            pixels.len()
+        )));
+    }
+
+    Ok(DecodedImage {
+        height: height_us,
+        width: width_us,
+        channels,
+        pixels,
+    })
+}
+
+/// Writes the interleaved (HWC) samples into `pixels`, returning the number of
+/// samples written. The output layout and channel selection are decided by
+/// [`build_decoded_image`].
+#[allow(clippy::too_many_arguments)]
+fn run_interleave(
+    pixels: &mut [f32],
+    grids: &[&ImageBuffer],
+    bit_depth: &[BitDepth],
+    start_offset_xy: &[(i32, i32)],
+    spot_colors: &[SpotColor],
+    orientation: u32,
+    width: u32,
+    height: u32,
+) -> usize {
+    let width_us = width as usize;
+    let channels = grids.len();
+
     let mut count = 0usize;
     for y in 0..height {
         for x in 0..width {
@@ -134,7 +182,7 @@ pub fn interleave(rendered: &RenderedFrame) -> Result<DecodedImage, DecodeError>
                     pixels[idx] = sample_from_grid(grid, px as usize, py as usize, bd);
                 } else {
                     let mut sample = sample_from_grid(grid, px as usize, py as usize, bd);
-                    for spot in &spot_colors {
+                    for spot in spot_colors {
                         let color = [spot.rgb.0, spot.rgb.1, spot.rgb.2][c];
                         let mix = match (
                             orig_x.checked_add_signed(spot.start_offset_xy.0),
@@ -158,20 +206,7 @@ pub fn interleave(rendered: &RenderedFrame) -> Result<DecodedImage, DecodeError>
             }
         }
     }
-
-    if count != pixels.len() {
-        return Err(DecodeError::new(format!(
-            "expected to write {} samples, wrote {count}",
-            pixels.len()
-        )));
-    }
-
-    Ok(DecodedImage {
-        height: height_us,
-        width: width_us,
-        channels,
-        pixels,
-    })
+    count
 }
 
 #[inline]

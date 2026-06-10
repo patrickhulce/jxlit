@@ -1,9 +1,9 @@
-//! Modular frame-decode path.
+//! Modular frame-decode flow.
 //!
 //! The Modular encoding has no separate dequant/IDCT stages, so (unlike the
-//! VarDCT path) it is not decomposed further: this forwards to the vendored
+//! VarDCT flow) it is not decomposed further: this forwards to the vendored
 //! `jxl_render::modular::render_modular`, which performs the modular entropy
-//! decode and inverse transforms.
+//! decode and inverse transforms, returning the pixel-domain color buffer.
 
 use jxl_modular::Sample;
 use jxl_threadpool::JxlThreadPool;
@@ -12,7 +12,8 @@ use crate::vendor::jxl_render::{
     ImageWithRegion, IndexedFrame, Region, RenderCache, Result, modular,
 };
 
-pub(crate) fn decode<S: Sample>(
+/// Decodes a Modular frame into its pixel-domain color buffer.
+pub fn run_modular_flow<S: Sample>(
     frame: &IndexedFrame,
     cache: &mut RenderCache<S>,
     region: Region,
