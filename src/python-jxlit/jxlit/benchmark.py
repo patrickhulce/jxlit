@@ -9,10 +9,11 @@ import sys
 import time
 from pathlib import Path
 
-from jxlit import decode
+from jxlit import DecodeOptions, decode
 
 WARMUP_DECODES = 3
 DEFAULT_ITERATIONS = 100
+DEFAULT_FILE = Path(__file__).resolve().parents[3] / "assets" / "frame_4K_10bit_e1_d0p5_fd4.jxl"
 
 
 def percentile(values: list[float], p: float) -> float:
@@ -29,7 +30,11 @@ def percentile(values: list[float], p: float) -> float:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Benchmark jxlit decode performance")
-    parser.add_argument("--file", required=True, help="Path to a JPEG XL file")
+    parser.add_argument(
+        "--file",
+        default=str(DEFAULT_FILE),
+        help="Path to a JPEG XL file",
+    )
     parser.add_argument(
         "--action",
         default="decode_cpu",
@@ -40,6 +45,12 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=DEFAULT_ITERATIONS,
         help="Number of measured decode iterations",
+    )
+    parser.add_argument(
+        "--threads",
+        type=int,
+        default=None,
+        help="Thread count for decode (default: available CPU cores)",
     )
     return parser.parse_args()
 
@@ -55,11 +66,12 @@ def main() -> None:
         print("--iterations must be greater than 0", file=sys.stderr)
         raise SystemExit(1)
 
+    decode_options = DecodeOptions(threads=args.threads)
     data = Path(args.file).read_bytes()
 
-    warmup = decode(data)
+    warmup = decode(data, options=decode_options)
     for _ in range(1, WARMUP_DECODES):
-        decode(data)
+        decode(data, options=decode_options)
 
     width = warmup.width
     height = warmup.height
@@ -71,7 +83,7 @@ def main() -> None:
 
     for _ in range(args.iterations):
         start = time.perf_counter()
-        decoded = decode(data)
+        decoded = decode(data, options=decode_options)
         elapsed_ms = (time.perf_counter() - start) * 1000.0
         latencies_ms.append(elapsed_ms)
         _ = decoded

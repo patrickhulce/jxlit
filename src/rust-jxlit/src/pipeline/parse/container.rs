@@ -47,7 +47,10 @@ pub fn read_codestream(input: &[u8]) -> Result<Vec<u8>, DecodeError> {
 /// Parses the image header and embedded ICC profile, returning a
 /// [`ContainerDeclaration`] with the offset of the first real frame (skipping
 /// the preview frame if present).
-pub fn read_header(codestream: &[u8]) -> Result<ContainerDeclaration, DecodeError> {
+pub fn read_header(
+    codestream: &[u8],
+    pool: JxlThreadPool,
+) -> Result<ContainerDeclaration, DecodeError> {
     let mut bitstream = Bitstream::new(codestream);
     let image_header =
         ImageHeader::parse(&mut bitstream, ()).map_err(|e| DecodeError::new(e.to_string()))?;
@@ -72,7 +75,7 @@ pub fn read_header(codestream: &[u8]) -> Result<ContainerDeclaration, DecodeErro
             FrameContext {
                 image_header: image_header.clone(),
                 tracker: None,
-                pool: JxlThreadPool::none(),
+                pool: pool.clone(),
             },
         )
         .map_err(|e| DecodeError::new(e.to_string()))?;
@@ -89,12 +92,14 @@ pub fn read_header(codestream: &[u8]) -> Result<ContainerDeclaration, DecodeErro
     })
 }
 
-/// Builds a single-threaded, CMS-less render context (matching the previous
-/// `jxl-oxide` `default-features = false` configuration) and bundles it with the
-/// declaration into a [`ContainerCtx`].
-pub fn build_container_ctx(declaration: ContainerDeclaration) -> Result<ContainerCtx, DecodeError> {
+/// Builds a CMS-less render context and bundles it with the declaration into a
+/// [`ContainerCtx`].
+pub fn build_container_ctx(
+    declaration: ContainerDeclaration,
+    pool: JxlThreadPool,
+) -> Result<ContainerCtx, DecodeError> {
     let mut builder = RenderContext::builder()
-        .pool(JxlThreadPool::none())
+        .pool(pool)
         .force_wide_buffers(false);
     if let Some(icc) = declaration.embedded_icc.clone() {
         builder = builder.embedded_icc(icc);

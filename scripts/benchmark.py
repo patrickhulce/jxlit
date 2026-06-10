@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_FILE = REPO_ROOT / "assets" / "colors_e1_d0p5_fd4.jxl"
+DEFAULT_FILE = REPO_ROOT / "assets" / "frame_4K_10bit_e1_d0p5_fd4.jxl"
 DEFAULT_ACTION = "decode_cpu"
 DEFAULT_ITERATIONS = 100
 DEFAULT_WORKERS = 1
@@ -76,6 +76,12 @@ def parse_args() -> argparse.Namespace:
         help="Measured decode iterations per worker",
     )
     parser.add_argument(
+        "--threads",
+        type=int,
+        default=None,
+        help="Thread count for decode (default: available CPU cores)",
+    )
+    parser.add_argument(
         "--workers",
         type=int,
         default=DEFAULT_WORKERS,
@@ -115,7 +121,13 @@ def parse_worker_result(payload: dict[str, Any]) -> WorkerResult:
     )
 
 
-def build_command(lang: str, file_path: Path, action: str, iterations: int) -> list[str]:
+def build_command(
+    lang: str,
+    file_path: Path,
+    action: str,
+    iterations: int,
+    threads: int | None,
+) -> list[str]:
     common = [
         "--file",
         str(file_path),
@@ -124,6 +136,8 @@ def build_command(lang: str, file_path: Path, action: str, iterations: int) -> l
         "--iterations",
         str(iterations),
     ]
+    if threads is not None:
+        common.extend(["--threads", str(threads)])
 
     if lang == "rust":
         binary = REPO_ROOT / "target" / "release" / "jxlit-benchmark"
@@ -148,8 +162,14 @@ def build_command(lang: str, file_path: Path, action: str, iterations: int) -> l
     raise ValueError(f"unsupported language: {lang}")
 
 
-def run_worker(lang: str, file_path: Path, action: str, iterations: int) -> WorkerResult:
-    command = build_command(lang, file_path, action, iterations)
+def run_worker(
+    lang: str,
+    file_path: Path,
+    action: str,
+    iterations: int,
+    threads: int | None,
+) -> WorkerResult:
+    command = build_command(lang, file_path, action, iterations, threads)
     if lang == "python":
         cwd = REPO_ROOT / "src" / "python-jxlit"
     elif lang in {"node", "wasm"}:
@@ -247,13 +267,14 @@ def run_language_batch(
     action: str,
     iterations: int,
     workers: int,
+    threads: int | None,
 ) -> LanguageSummary:
     batch_start = time.perf_counter()
     results: list[WorkerResult] = []
 
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = [
-            executor.submit(run_worker, lang, file_path, action, iterations)
+            executor.submit(run_worker, lang, file_path, action, iterations, threads)
             for _ in range(workers)
         ]
         for future in as_completed(futures):
@@ -354,7 +375,8 @@ def main() -> None:
 
     print(
         f"benchmark action={args.action} file={file_path.name} "
-        f"iterations/worker={args.iterations} workers={args.workers}"
+        f"iterations/worker={args.iterations} workers={args.workers} "
+        f"threads={args.threads if args.threads is not None else 'auto'}"
     )
 
     summaries: list[LanguageSummary] = []
@@ -365,6 +387,7 @@ def main() -> None:
             action=args.action,
             iterations=args.iterations,
             workers=args.workers,
+            threads=args.threads,
         )
         summaries.append(summary)
         print_language_summary(summary)

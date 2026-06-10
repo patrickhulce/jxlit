@@ -7,10 +7,11 @@
         test-rust test-python test-node test-wasm \
         benchmark-rust benchmark-python benchmark-node benchmark-wasm
 
-WORKERS ?= 1
-ITERATIONS ?= 100
-FILE ?= assets/colors_e1_d0p5_fd4.jxl
-BENCHMARK_ARGS = --workers $(WORKERS) --iterations $(ITERATIONS) --file $(FILE)
+WORKERS ?= 2
+THREADS ?= 2
+ITERATIONS ?= 25
+FILE ?= assets/frame_4K_10bit_e1_d0p5_fd4.jxl
+BENCHMARK_ARGS = --workers $(WORKERS) --iterations $(ITERATIONS) --file $(FILE) --threads $(THREADS)
 
 all: build lint typecheck test
 

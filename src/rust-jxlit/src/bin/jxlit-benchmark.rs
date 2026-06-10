@@ -1,23 +1,27 @@
 use std::env;
 use std::fs;
+use std::path::PathBuf;
 use std::process;
 use std::time::Instant;
 
-use jxlit::decode;
+use jxlit::{DecodeOptions, decode_with_options};
 
 const WARMUP_DECODES: usize = 3;
 const DEFAULT_ITERATIONS: usize = 100;
+const DEFAULT_FILE: &str = "assets/frame_4K_10bit_e1_d0p5_fd4.jxl";
 
 struct Options {
     file: String,
     action: String,
     iterations: usize,
+    threads: Option<usize>,
 }
 
 fn parse_args() -> Options {
     let mut file: Option<String> = None;
     let mut action: Option<String> = None;
     let mut iterations = DEFAULT_ITERATIONS;
+    let mut threads: Option<usize> = None;
     let mut args = env::args().skip(1);
 
     while let Some(arg) = args.next() {
@@ -44,6 +48,16 @@ fn parse_args() -> Options {
                     process::exit(1);
                 });
             }
+            "--threads" => {
+                let value = args.next().unwrap_or_else(|| {
+                    eprintln!("missing value for --threads");
+                    process::exit(1);
+                });
+                threads = Some(value.parse().unwrap_or_else(|_| {
+                    eprintln!("invalid --threads value: {value}");
+                    process::exit(1);
+                }));
+            }
             other => {
                 eprintln!("unknown argument: {other}");
                 process::exit(1);
@@ -51,10 +65,7 @@ fn parse_args() -> Options {
         }
     }
 
-    let file = file.unwrap_or_else(|| {
-        eprintln!("--file is required");
-        process::exit(1);
-    });
+    let file = file.unwrap_or_else(|| DEFAULT_FILE.to_string());
     let action = action.unwrap_or_else(|| "decode_cpu".to_string());
 
     if action != "decode_cpu" {
@@ -71,6 +82,7 @@ fn parse_args() -> Options {
         file,
         action,
         iterations,
+        threads,
     }
 }
 
@@ -88,20 +100,44 @@ fn percentile(sorted: &[f64], p: f64) -> f64 {
     sorted[lower] * (1.0 - weight) + sorted[upper] * weight
 }
 
+fn resolve_file(path: &str) -> PathBuf {
+    let candidate = PathBuf::from(path);
+    if candidate.is_file() {
+        return candidate;
+    }
+
+    if let Ok(manifest_dir) = env::var("CARGO_MANIFEST_DIR") {
+        let from_manifest = PathBuf::from(&manifest_dir)
+            .join("..")
+            .join("..")
+            .join(path);
+        if from_manifest.is_file() {
+            return from_manifest;
+        }
+    }
+
+    candidate
+}
+
 fn main() {
     let options = parse_args();
+    let file_path = resolve_file(&options.file);
 
-    let bytes = fs::read(&options.file).unwrap_or_else(|e| {
-        eprintln!("failed to read {}: {e}", options.file);
+    let bytes = fs::read(&file_path).unwrap_or_else(|e| {
+        eprintln!("failed to read {}: {e}", file_path.display());
         process::exit(1);
     });
 
-    let warmup = decode(&bytes).unwrap_or_else(|e| {
+    let decode_options = DecodeOptions {
+        threads: options.threads,
+    };
+
+    let warmup = decode_with_options(&bytes, &decode_options).unwrap_or_else(|e| {
         eprintln!("warmup decode failed: {e}");
         process::exit(1);
     });
     for _ in 1..WARMUP_DECODES {
-        decode(&bytes).unwrap_or_else(|e| {
+        decode_with_options(&bytes, &decode_options).unwrap_or_else(|e| {
             eprintln!("warmup decode failed: {e}");
             process::exit(1);
         });
@@ -116,7 +152,7 @@ fn main() {
 
     for _ in 0..options.iterations {
         let start = Instant::now();
-        let decoded = decode(&bytes).unwrap_or_else(|e| {
+        let decoded = decode_with_options(&bytes, &decode_options).unwrap_or_else(|e| {
             eprintln!("decode failed: {e}");
             process::exit(1);
         });

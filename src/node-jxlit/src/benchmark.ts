@@ -1,10 +1,18 @@
 import { readFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
 
 import { decode } from "./index.js";
 
 const WARMUP_DECODES = 3;
 const DEFAULT_ITERATIONS = 100;
+const DEFAULT_FILE = join(
+  process.cwd(),
+  "..",
+  "..",
+  "assets",
+  "frame_4K_10bit_e1_d0p5_fd4.jxl",
+);
 
 interface LatencyStats {
   mean: number;
@@ -30,12 +38,14 @@ interface Options {
   file: string;
   action: string;
   iterations: number;
+  threads?: number;
 }
 
 function parseArgs(argv: string[]): Options {
   let file: string | undefined;
   let action = "decode_cpu";
   let iterations = DEFAULT_ITERATIONS;
+  let threads: number | undefined;
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -51,6 +61,11 @@ function parseArgs(argv: string[]): Options {
         iterations = Number.parseInt(value ?? "", 10);
         break;
       }
+      case "--threads": {
+        const value = argv[++i];
+        threads = Number.parseInt(value ?? "", 10);
+        break;
+      }
       default:
         console.error(`unknown argument: ${arg}`);
         process.exit(1);
@@ -58,8 +73,7 @@ function parseArgs(argv: string[]): Options {
   }
 
   if (!file) {
-    console.error("--file is required");
-    process.exit(1);
+    file = resolve(DEFAULT_FILE);
   }
 
   if (action !== "decode_cpu") {
@@ -72,7 +86,7 @@ function parseArgs(argv: string[]): Options {
     process.exit(1);
   }
 
-  return { file, action, iterations };
+  return { file, action, iterations, threads };
 }
 
 function percentile(sorted: number[], p: number): number {
@@ -92,10 +106,12 @@ function percentile(sorted: number[], p: number): number {
 function main(): void {
   const options = parseArgs(process.argv.slice(2));
   const bytes = readFileSync(options.file);
+  const decodeOptions =
+    options.threads === undefined ? undefined : { threads: options.threads };
 
-  const warmup = decode(bytes);
+  const warmup = decode(bytes, decodeOptions);
   for (let i = 1; i < WARMUP_DECODES; i++) {
-    decode(bytes);
+    decode(bytes, decodeOptions);
   }
   const width = warmup.width;
   const height = warmup.height;
@@ -107,7 +123,7 @@ function main(): void {
 
   for (let i = 0; i < options.iterations; i++) {
     const start = performance.now();
-    const decoded = decode(bytes);
+    const decoded = decode(bytes, decodeOptions);
     const elapsedMs = performance.now() - start;
     latenciesMs.push(elapsedMs);
     void decoded;

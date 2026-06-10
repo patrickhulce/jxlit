@@ -8,5 +8,5 @@ license.workspace = true
 crate-type = ["cdylib"]
 
 [dependencies]
-jxlit = { path = "../rust-jxlit" }
+jxlit = { path = "../rust-jxlit", default-features = false }
 wasm-bindgen = "0.2"
