@@ -36,6 +36,8 @@ pub fn render_tile<S: Sample>(frame_ctx: &FrameCtx<'_, S>, mut tile: TileCtx<'_,
             group_index,
             frame_ctx.frame_header,
             frame_ctx.low_frequency_groups,
+            &frame_ctx.options,
+            frame_ctx.env,
         );
         return;
     }
@@ -50,6 +52,8 @@ pub fn render_tile<S: Sample>(frame_ctx: &FrameCtx<'_, S>, mut tile: TileCtx<'_,
         frame_ctx.low_frequency_global,
         frame_ctx.low_frequency_groups,
         high_frequency_global,
+        &frame_ctx.options,
+        frame_ctx.env,
     );
 
     if !frame_ctx.subsampled {
@@ -79,6 +83,8 @@ pub fn render_tile<S: Sample>(frame_ctx: &FrameCtx<'_, S>, mut tile: TileCtx<'_,
             &x_from_y,
             &b_from_y,
             lf_chan_corr,
+            &frame_ctx.options,
+            frame_ctx.env,
         );
     }
 
@@ -88,5 +94,7 @@ pub fn render_tile<S: Sample>(frame_ctx: &FrameCtx<'_, S>, mut tile: TileCtx<'_,
         group_index,
         frame_ctx.frame_header,
         frame_ctx.low_frequency_groups,
+        &frame_ctx.options,
+        frame_ctx.env,
     );
 }

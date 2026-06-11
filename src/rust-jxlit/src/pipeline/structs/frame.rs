@@ -5,7 +5,8 @@ use std::collections::HashMap;
 use jxl_image::ImageHeader;
 use jxl_modular::Sample;
 
-use crate::pipeline::gpu::{Device, DeviceImage};
+use crate::pipeline::gpu::{Device, DeviceImage, GpuEnvironment};
+use crate::types::DecodeOptions;
 use crate::vendor::jxl_frame::FrameHeader;
 use crate::vendor::jxl_frame::data::{HfGlobal, LfGlobal, LfGlobalVarDct, LfGroup};
 use crate::vendor::jxl_render::Region;
@@ -33,6 +34,8 @@ pub struct FrameDeclaration<'a> {
 pub struct FrameCtx<'a, S: Sample> {
     #[allow(dead_code)]
     pub device: Device,
+    pub options: DecodeOptions,
+    pub env: GpuEnvironment,
     pub frame_header: &'a FrameHeader,
     pub image_header: &'a ImageHeader,
     pub low_frequency_global: &'a LfGlobal<S>,

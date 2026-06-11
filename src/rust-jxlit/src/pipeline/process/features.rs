@@ -8,7 +8,8 @@ use std::sync::Arc;
 use jxl_modular::Sample;
 use jxl_threadpool::JxlThreadPool;
 
-use crate::pipeline::gpu::{DeviceImage, kernels};
+use crate::pipeline::gpu::{DeviceImage, GpuEnvironment, availability, kernels};
+use crate::types::DecodeOptions;
 use crate::vendor::jxl_frame::data::LfGlobal;
 use crate::vendor::jxl_render::{
     Error, ImageWithRegion, IndexedFrame, Reference, Region, Result, blend, features,
@@ -25,19 +26,21 @@ pub fn run_features<S: Sample>(
     visible_frames_num: usize,
     invisible_frames_num: usize,
     pool: &JxlThreadPool,
+    options: &DecodeOptions,
+    env: GpuEnvironment,
 ) -> Result<()> {
-    match grid {
-        DeviceImage::Cpu(image) => run_features_cpu(
-            frame,
-            image,
-            upsampling_valid_region,
-            reference_grids,
-            low_frequency_global,
-            visible_frames_num,
-            invisible_frames_num,
-            pool,
-        ),
-        DeviceImage::Gpu(_) => kernels::run_features_on_gpu(
+    if availability::run_features_available(
+        frame,
+        grid,
+        upsampling_valid_region,
+        reference_grids.clone(),
+        low_frequency_global,
+        visible_frames_num,
+        invisible_frames_num,
+        options,
+        env,
+    ) {
+        return kernels::run_features_on_gpu(
             frame,
             grid,
             upsampling_valid_region,
@@ -46,8 +49,22 @@ pub fn run_features<S: Sample>(
             visible_frames_num,
             invisible_frames_num,
             pool,
-        ),
+        );
     }
+
+    let image = grid
+        .ensure_cpu()
+        .expect("image must be CPU-resident when features GPU kernel is unavailable");
+    run_features_cpu(
+        frame,
+        image,
+        upsampling_valid_region,
+        reference_grids,
+        low_frequency_global,
+        visible_frames_num,
+        invisible_frames_num,
+        pool,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]

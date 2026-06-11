@@ -13,13 +13,17 @@ use std::sync::RwLock;
 use jxl_modular::Sample;
 use jxl_threadpool::JxlThreadPool;
 
-use crate::pipeline::gpu::{Device, DeviceCoefficients, DeviceImage, build_coefficient_buffer};
+use crate::pipeline::gpu::{
+    Device, DeviceCoefficients, DeviceImage, GpuEnvironment, build_coefficient_buffer,
+};
+use crate::types::DecodeOptions;
 use crate::vendor::jxl_frame::data::{PassGroupParams, PassGroupParamsVardct};
 use crate::vendor::jxl_render::{Error, IndexedFrame, Reference, Region, RenderCache, Result};
 
 use crate::pipeline::structs::frame::{FrameCtx, FrameDeclaration};
 use crate::pipeline::{decode, parse, render};
 
+#[allow(clippy::too_many_arguments)]
 pub fn run_vardct_flow<S: Sample>(
     device: Device,
     frame: &IndexedFrame,
@@ -27,6 +31,8 @@ pub fn run_vardct_flow<S: Sample>(
     cache: &mut RenderCache<S>,
     region: Region,
     pool: &JxlThreadPool,
+    options: &DecodeOptions,
+    env: GpuEnvironment,
 ) -> Result<DeviceImage> {
     let _vardct_flow = crate::phase_guard!("vardct_flow");
     let image_header = frame.image_header();
@@ -133,6 +139,8 @@ pub fn run_vardct_flow<S: Sample>(
                 low_frequency_global_vardct,
                 subsampled,
                 pool,
+                options,
+                env,
             )?
         };
 
@@ -147,6 +155,8 @@ pub fn run_vardct_flow<S: Sample>(
             frame_header,
             frame_declaration.modular_region,
             tracker,
+            options,
+            env,
         )?
     };
 
@@ -226,6 +236,8 @@ pub fn run_vardct_flow<S: Sample>(
                                     },
                                     group_idx,
                                     pass_idx,
+                                    options,
+                                    env,
                                 );
                                 if !allow_partial && r.is_err() {
                                     *result.write().unwrap() = r.map_err(From::from);
@@ -251,6 +263,8 @@ pub fn run_vardct_flow<S: Sample>(
                                     },
                                     group_idx,
                                     pass_idx,
+                                    options,
+                                    env,
                                 );
                                 if !allow_partial && r.is_err() {
                                     *result.write().unwrap() = r.map_err(From::from);
@@ -267,6 +281,8 @@ pub fn run_vardct_flow<S: Sample>(
 
     let frame_ctx = FrameCtx {
         device,
+        options: *options,
+        env,
         frame_header: frame_declaration.frame_header,
         image_header: frame_declaration.image_header,
         low_frequency_global,

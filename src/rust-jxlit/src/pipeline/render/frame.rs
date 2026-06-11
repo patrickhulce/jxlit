@@ -15,7 +15,8 @@ use jxl_modular::{ChannelShift, Sample, image::TransformedModularSubimage};
 use jxl_threadpool::JxlThreadPool;
 
 use crate::pipeline::gpu::{
-    Device, DeviceImage, GpuImageWithRegion, from_cpu, from_cpu_arc, into_cpu_arc, kernels,
+    Device, DeviceImage, GpuEnvironment, GpuImageWithRegion, availability, from_cpu, from_cpu_arc,
+    into_cpu_arc, kernels,
 };
 use crate::vendor::jxl_frame::FrameHeader;
 use crate::vendor::jxl_frame::data::{LfGlobal, LfGlobalVarDct, LfGroup};
@@ -62,8 +63,9 @@ pub fn render_frame(
         .keyframe_frame_index(keyframe_index)
         .ok_or_else(|| DecodeError::new("keyframe not loaded"))?;
 
-    let image =
-        render_keyframe_image(ctx, idx, options).map_err(|e| DecodeError::new(e.to_string()))?;
+    let env = GpuEnvironment::current();
+    let image = render_keyframe_image(ctx, idx, options, env)
+        .map_err(|e| DecodeError::new(e.to_string()))?;
 
     let frame = &ctx.frames()[idx];
     let frame_header = frame.header();
@@ -88,24 +90,35 @@ pub fn render_frame(
         render_spot_color: !metadata.grayscale(),
     };
 
-    build_decoded_image(&rendered, options)
+    build_decoded_image(&rendered, options, env)
 }
 
 /// Fuses spot-color extra channels into RGB grids in place when possible.
 fn fuse_spot_colors(
     rendered: &RenderedFrame,
+    options: &DecodeOptions,
+    env: GpuEnvironment,
 ) -> std::result::Result<(Arc<DeviceImage>, bool), DecodeError> {
+    if rendered.image.as_ref().device().is_gpu()
+        && availability::fuse_spot_colors_available(
+            rendered.image.as_ref(),
+            rendered.color_bit_depth,
+            &rendered.extra_channels,
+            options,
+            env,
+        )
+    {
+        return kernels::fuse_spot_colors_on_gpu(
+            Arc::clone(&rendered.image),
+            rendered.color_bit_depth,
+            &rendered.extra_channels,
+        )
+        .map_err(|e| DecodeError::new(e.to_string()));
+    }
+
     match rendered.image.as_ref() {
         DeviceImage::Cpu(_) if rendered.render_spot_color => {
             // fall through to CPU path below
-        }
-        DeviceImage::Gpu(_) => {
-            return kernels::fuse_spot_colors_on_gpu(
-                Arc::clone(&rendered.image),
-                rendered.color_bit_depth,
-                &rendered.extra_channels,
-            )
-            .map_err(|e| DecodeError::new(e.to_string()));
         }
         _ => return Ok((Arc::clone(&rendered.image), false)),
     }
@@ -178,6 +191,7 @@ fn fuse_spot_colors(
 fn build_decoded_image(
     rendered: &RenderedFrame,
     options: &DecodeOptions,
+    env: GpuEnvironment,
 ) -> std::result::Result<DecodedImage, DecodeError> {
     let _build_decoded_image = crate::phase_guard!("build_decoded_image");
     let orientation = rendered.orientation;
@@ -193,13 +207,40 @@ fn build_decoded_image(
         std::mem::swap(&mut width, &mut height);
     }
 
-    let (image, spots_fused) = fuse_spot_colors(rendered)?;
+    let (image, spots_fused) = fuse_spot_colors(rendered, options, env)?;
 
-    if image.as_ref().device().is_gpu() {
-        let channels = image.color_channels();
-        let width_us = width as usize;
-        let height_us = height as usize;
-        let plane_size = width_us * height_us;
+    let channels = image.color_channels();
+    let width_us = width as usize;
+    let height_us = height as usize;
+    let plane_size = width_us * height_us;
+
+    let use_gpu_interleave = availability::run_interleave_available(
+        image.as_ref(),
+        orientation,
+        width,
+        height,
+        channels,
+        options.layout,
+        options,
+        env,
+    );
+    let use_gpu_export = availability::run_export_planar_available(
+        image.as_ref(),
+        orientation,
+        width,
+        height,
+        channels,
+        options.layout,
+        options,
+        env,
+    );
+
+    if image.as_ref().device().is_gpu()
+        && match options.layout {
+            PixelLayout::Interleaved => use_gpu_interleave,
+            PixelLayout::Planar => use_gpu_export,
+        }
+    {
         let mut pixels = vec![0.0f32; plane_size * channels];
         let count = match options.layout {
             PixelLayout::Interleaved => kernels::run_interleave_on_gpu(
@@ -379,6 +420,7 @@ fn render_keyframe_image(
     ctx: &RenderContext,
     idx: usize,
     options: &DecodeOptions,
+    env: GpuEnvironment,
 ) -> Result<Arc<DeviceImage>> {
     let _render_keyframe = crate::phase_guard!("render_keyframe");
     let frame = &ctx.frames()[idx];
@@ -397,6 +439,7 @@ fn render_keyframe_image(
             pool,
             frame_visibility,
             options,
+            env,
         )?
     } else {
         let refs = ctx.reference_frames_wide(idx);
@@ -409,20 +452,22 @@ fn render_keyframe_image(
             pool,
             frame_visibility,
             options,
+            env,
         )?
     };
 
     let blended = {
         let _blend = crate::phase_guard!("blend");
-        run_blend(ctx, idx, grid)?
+        run_blend(ctx, idx, grid, options, env)?
     };
     let _xyb2rgb = crate::phase_guard!("xyb2rgb");
-    process::xyb2rgb::run_xyb2rgb(ctx, frame, blended)
+    process::xyb2rgb::run_xyb2rgb(ctx, frame, blended, options, env)
 }
 
 /// Decodes a single frame's color buffer: dispatch to the VarDCT/Modular flow,
 /// then run the shared post-decode stage (filters, features, upsampling and
 /// color-for-record).
+#[allow(clippy::too_many_arguments)]
 fn decode_color_buffer<S: Sample>(
     frame: &IndexedFrame,
     reference_frames: ReferenceFrames<S>,
@@ -431,11 +476,12 @@ fn decode_color_buffer<S: Sample>(
     pool: &JxlThreadPool,
     frame_visibility: (usize, usize),
     options: &DecodeOptions,
+    env: GpuEnvironment,
 ) -> Result<DeviceImage> {
     let _decode_color_buffer = crate::phase_guard!("decode_color_buffer");
     let image_header = frame.image_header();
     let frame_header = frame.header();
-    let device = Device::select(options, frame_header);
+    let device = Device::select(options, frame_header, env);
 
     let regions = render::region::render_region(frame, image_region);
     let color_padded_region = regions.color_padded_region;
@@ -453,6 +499,8 @@ fn decode_color_buffer<S: Sample>(
                 cache,
                 color_padded_region,
                 pool,
+                options,
+                env,
             );
             match (result, reference_frames.lf) {
                 (Ok(grid), _) => grid,
@@ -474,6 +522,8 @@ fn decode_color_buffer<S: Sample>(
             &mut fb,
             color_padded_region,
             image_header.metadata.bit_depth,
+            options,
+            env,
         )?;
     }
 
@@ -486,6 +536,8 @@ fn decode_color_buffer<S: Sample>(
             color_padded_region,
             &cache.lf_groups,
             pool,
+            options,
+            env,
         )?;
     }
     fb.remove_color_channels(color_channels);
@@ -501,6 +553,8 @@ fn decode_color_buffer<S: Sample>(
             frame_visibility.0,
             frame_visibility.1,
             pool,
+            options,
+            env,
         )?;
     }
     {
@@ -510,11 +564,20 @@ fn decode_color_buffer<S: Sample>(
             image_header,
             frame_header,
             upsampling_valid_region,
+            options,
+            env,
         )?;
     }
     if !frame_header.save_before_ct && !frame_header.is_last {
         let _color_for_record = crate::phase_guard!("color_for_record");
-        process::xyb2rgb::run_color_for_record(image_header, frame_header.do_ycbcr, &mut fb, pool)?;
+        process::xyb2rgb::run_color_for_record(
+            image_header,
+            frame_header.do_ycbcr,
+            &mut fb,
+            pool,
+            options,
+            env,
+        )?;
     }
 
     Ok(fb)
@@ -558,6 +621,8 @@ pub fn build_low_frequency_image<S: Sample>(
     low_frequency_global_vardct: &LfGlobalVarDct,
     subsampled: bool,
     pool: &JxlThreadPool,
+    options: &DecodeOptions,
+    env: GpuEnvironment,
 ) -> Result<DeviceImage> {
     let low_frequency_image = parse::frames::read_low_frequency_groups(
         frame,
@@ -581,7 +646,9 @@ pub fn build_low_frequency_image<S: Sample>(
             subsampled,
             frame.header().flags.skip_adaptive_lf_smoothing(),
         )?;
-        Ok(match device {
+        let use_gpu = device.is_gpu()
+            && availability::build_low_frequency_image_available(frame.header(), options, env);
+        Ok(match if use_gpu { Device::Gpu } else { Device::Cpu } {
             Device::Cpu => from_cpu(low_frequency_image),
             Device::Gpu => DeviceImage::Gpu(GpuImageWithRegion::from_cpu_placeholder(
                 &low_frequency_image,
@@ -591,12 +658,20 @@ pub fn build_low_frequency_image<S: Sample>(
 }
 
 /// Blends the decoded frame onto the canvas via the vendored staged blender.
-pub fn run_blend(ctx: &RenderContext, idx: usize, grid: DeviceImage) -> Result<Arc<DeviceImage>> {
-    match grid {
-        DeviceImage::Cpu(image) => {
-            let blended = ctx.blend_staged(idx, image)?;
-            Ok(from_cpu_arc(blended))
-        }
-        DeviceImage::Gpu(_) => kernels::run_blend_on_gpu(ctx, idx, grid),
+pub fn run_blend(
+    ctx: &RenderContext,
+    idx: usize,
+    grid: DeviceImage,
+    options: &DecodeOptions,
+    env: GpuEnvironment,
+) -> Result<Arc<DeviceImage>> {
+    if availability::run_blend_available(ctx, idx, &grid, options, env) {
+        return kernels::run_blend_on_gpu(ctx, idx, grid);
     }
+
+    let DeviceImage::Cpu(image) = grid else {
+        unreachable!("blend GPU fallback requires CPU-resident image");
+    };
+    let blended = ctx.blend_staged(idx, image)?;
+    Ok(from_cpu_arc(blended))
 }

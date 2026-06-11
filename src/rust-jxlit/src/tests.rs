@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use crate::{DecodeOptions, PixelLayout, decode, decode_with_options};
+use crate::{DecodeOptions, Hardware, PixelLayout, decode, decode_with_options};
 
 fn assets_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -106,6 +106,30 @@ fn decode_planar_colors_fixture_uses_memcpy_export() {
     assert!(
         names.contains(&"export_planar_memcpy"),
         "expected export_planar_memcpy in telemetry, got {names:?}"
+    );
+}
+
+#[test]
+fn decode_gpu_hardware_falls_back_to_cpu_without_panic() {
+    let assets = assets_dir();
+    let jxl_path = assets.join("colors_e1_d0p5_fd4.jxl");
+    let jxl_bytes = fs::read(&jxl_path).expect("read jxl fixture");
+
+    let decoded = decode_with_options(
+        &jxl_bytes,
+        &DecodeOptions {
+            hardware: Hardware::Gpu,
+            ..DecodeOptions::default()
+        },
+    )
+    .expect("GPU hardware request should fall back to CPU decode");
+
+    assert!(decoded.width > 0);
+    assert!(decoded.height > 0);
+    assert_eq!(decoded.channels, 3);
+    assert_eq!(
+        decoded.pixels.len(),
+        decoded.width * decoded.height * decoded.channels
     );
 }
 

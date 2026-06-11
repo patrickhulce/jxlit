@@ -10,7 +10,8 @@ use jxl_grid::AlignedGrid;
 use jxl_modular::Sample;
 use jxl_threadpool::JxlThreadPool;
 
-use crate::pipeline::gpu::{DeviceImage, kernels};
+use crate::pipeline::gpu::{DeviceImage, GpuEnvironment, availability, kernels};
+use crate::types::DecodeOptions;
 use crate::vendor::jxl_frame::data::LfGroup;
 use crate::vendor::jxl_frame::filter::{EdgePreservingFilter, Gabor};
 use crate::vendor::jxl_render::{ImageWithRegion, IndexedFrame, Region, Result, filter};
@@ -23,23 +24,36 @@ pub fn run_loop_filters<S: Sample>(
     color_padded_region: Region,
     low_frequency_groups: &HashMap<u32, LfGroup<S>>,
     pool: &JxlThreadPool,
+    options: &DecodeOptions,
+    env: GpuEnvironment,
 ) -> Result<()> {
-    match fb {
-        DeviceImage::Cpu(image) => run_loop_filters_cpu(
-            frame,
-            image,
-            color_padded_region,
-            low_frequency_groups,
-            pool,
-        ),
-        DeviceImage::Gpu(_) => kernels::run_loop_filters_on_gpu(
+    if availability::run_loop_filters_available(
+        frame,
+        fb,
+        color_padded_region,
+        low_frequency_groups,
+        options,
+        env,
+    ) {
+        return kernels::run_loop_filters_on_gpu(
             frame,
             fb,
             color_padded_region,
             low_frequency_groups,
             pool,
-        ),
+        );
     }
+
+    let image = fb
+        .ensure_cpu()
+        .expect("image must be CPU-resident when loop-filters GPU kernel is unavailable");
+    run_loop_filters_cpu(
+        frame,
+        image,
+        color_padded_region,
+        low_frequency_groups,
+        pool,
+    )
 }
 
 fn run_loop_filters_cpu<S: Sample>(

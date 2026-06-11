@@ -9,7 +9,10 @@ use std::collections::HashMap;
 
 use jxl_modular::Sample;
 
-use crate::pipeline::gpu::{DeviceCoefficients, DeviceImage, kernels};
+use crate::pipeline::gpu::{
+    DeviceCoefficients, DeviceImage, GpuEnvironment, availability, kernels,
+};
+use crate::types::DecodeOptions;
 use crate::vendor::jxl_frame::FrameHeader;
 use crate::vendor::jxl_frame::data::LfGroup;
 use crate::vendor::jxl_render::{ImageWithRegion, vardct};
@@ -22,27 +25,41 @@ pub fn run_inverse_dct<S: Sample>(
     group_index: u32,
     frame_header: &FrameHeader,
     low_frequency_groups: &HashMap<u32, LfGroup<S>>,
+    options: &DecodeOptions,
+    env: GpuEnvironment,
 ) {
-    match (low_frequency_image, xyb_coefficients) {
-        (DeviceImage::Cpu(lf_image), DeviceCoefficients::Cpu(coeffs)) => {
-            vardct::transform_with_lf_grouped(
-                lf_image,
-                coeffs,
-                group_index,
-                frame_header,
-                low_frequency_groups,
-            );
-        }
-        (lf_image, coeffs) => {
-            kernels::run_inverse_dct_on_gpu(
-                lf_image,
-                coeffs,
-                group_index,
-                frame_header,
-                low_frequency_groups,
-            );
-        }
+    if availability::run_inverse_dct_available(
+        low_frequency_image,
+        xyb_coefficients,
+        group_index,
+        frame_header,
+        low_frequency_groups,
+        options,
+        env,
+    ) {
+        kernels::run_inverse_dct_on_gpu(
+            low_frequency_image,
+            xyb_coefficients,
+            group_index,
+            frame_header,
+            low_frequency_groups,
+        );
+        return;
     }
+
+    let lf_image = low_frequency_image
+        .as_cpu()
+        .expect("LF image must be CPU-resident when inverse DCT GPU kernel is unavailable");
+    let coeffs = xyb_coefficients
+        .ensure_cpu_mut()
+        .expect("coefficients must be CPU-resident when inverse DCT GPU kernel is unavailable");
+    vardct::transform_with_lf_grouped(
+        lf_image,
+        coeffs,
+        group_index,
+        frame_header,
+        low_frequency_groups,
+    );
 }
 
 /// CPU-only inverse DCT used when LF image is still a plain [`ImageWithRegion`].

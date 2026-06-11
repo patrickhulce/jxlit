@@ -7,6 +7,9 @@ use jxl_image::BitDepth;
 use jxl_modular::{ChannelShift, Sample};
 
 use crate::types::{DecodeOptions, Hardware};
+
+use super::availability;
+use super::environment::GpuEnvironment;
 use crate::vendor::jxl_frame::FrameHeader;
 use crate::vendor::jxl_frame::data::GlobalModular;
 use crate::vendor::jxl_frame::header::Encoding;
@@ -22,9 +25,16 @@ pub enum Device {
 }
 
 impl Device {
-    /// Picks the device for a frame based on decode options and encoding.
-    pub fn select(options: &DecodeOptions, frame_header: &FrameHeader) -> Self {
-        if options.hardware == Hardware::Gpu && frame_header.encoding == Encoding::VarDct {
+    /// Picks the device for a frame based on decode options, encoding, and GPU env.
+    pub fn select(
+        options: &DecodeOptions,
+        frame_header: &FrameHeader,
+        env: GpuEnvironment,
+    ) -> Self {
+        if options.hardware == Hardware::Gpu
+            && frame_header.encoding == Encoding::VarDct
+            && env.device_available
+        {
             Self::Gpu
         } else {
             Self::Cpu
@@ -169,6 +179,14 @@ impl DeviceImage {
             Self::Gpu(image) => image.set_ct_done(ct_done),
         }
     }
+
+    /// Ensures the image is CPU-resident, downloading from GPU when needed.
+    pub fn ensure_cpu(&mut self) -> Result<&mut ImageWithRegion> {
+        match self {
+            Self::Cpu(image) => Ok(image),
+            Self::Gpu(_) => unimplemented!("GPU path not implemented: download image"),
+        }
+    }
 }
 
 /// Borrowed view of channel buffers for export / interleave.
@@ -210,6 +228,14 @@ impl<'a> DeviceCoefficients<'a> {
             Self::Gpu(coeffs) => Some(coeffs),
         }
     }
+
+    /// Ensures coefficients are CPU-resident, downloading from GPU when needed.
+    pub fn ensure_cpu_mut(&mut self) -> Result<&mut [MutableSubgrid<'a, f32>; 3]> {
+        match self {
+            Self::Cpu(coeffs) => Ok(coeffs),
+            Self::Gpu(_) => unimplemented!("GPU path not implemented: download coefficients"),
+        }
+    }
 }
 
 /// Allocates an empty coefficient buffer on the selected device.
@@ -218,8 +244,12 @@ pub fn build_coefficient_buffer(
     frame_header: &FrameHeader,
     modular_region: Region,
     tracker: Option<&AllocTracker>,
+    options: &DecodeOptions,
+    env: GpuEnvironment,
 ) -> Result<DeviceImage> {
-    match device {
+    let use_gpu = device.is_gpu()
+        && availability::read_pass_group_available(frame_header, 0, 0, options, env);
+    match if use_gpu { Device::Gpu } else { Device::Cpu } {
         Device::Cpu => {
             let image = super::super::render::frame::build_coefficient_buffer_cpu(
                 frame_header,

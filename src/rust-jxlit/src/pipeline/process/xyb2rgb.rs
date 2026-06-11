@@ -12,7 +12,10 @@ use std::sync::Arc;
 use jxl_image::ImageHeader;
 use jxl_threadpool::JxlThreadPool;
 
-use crate::pipeline::gpu::{DeviceImage, from_cpu_arc, into_cpu_arc, kernels};
+use crate::pipeline::gpu::{
+    DeviceImage, GpuEnvironment, availability, from_cpu_arc, into_cpu_arc, kernels,
+};
+use crate::types::DecodeOptions;
 use crate::vendor::jxl_render::{IndexedFrame, RenderContext, Result, util};
 
 /// Runs the final keyframe color transform (XYB -> requested encoding).
@@ -20,15 +23,16 @@ pub fn run_xyb2rgb(
     ctx: &RenderContext,
     frame: &IndexedFrame,
     grid: Arc<DeviceImage>,
+    options: &DecodeOptions,
+    env: GpuEnvironment,
 ) -> Result<Arc<DeviceImage>> {
-    match grid.as_ref() {
-        DeviceImage::Cpu(_) => {
-            let cpu = into_cpu_arc(grid)?;
-            let out = ctx.postprocess_keyframe(frame, cpu)?;
-            Ok(from_cpu_arc(out))
-        }
-        DeviceImage::Gpu(_) => kernels::run_xyb2rgb_on_gpu(ctx, frame, grid),
+    if availability::run_xyb2rgb_available(ctx, frame, grid.as_ref(), options, env) {
+        return kernels::run_xyb2rgb_on_gpu(ctx, frame, grid);
     }
+
+    let cpu = into_cpu_arc(grid)?;
+    let out = ctx.postprocess_keyframe(frame, cpu)?;
+    Ok(from_cpu_arc(out))
 }
 
 /// Converts a non-final frame's color buffer "for record" prior to blending.
@@ -37,13 +41,15 @@ pub fn run_color_for_record(
     do_ycbcr: bool,
     fb: &mut DeviceImage,
     pool: &JxlThreadPool,
+    options: &DecodeOptions,
+    env: GpuEnvironment,
 ) -> Result<()> {
-    match fb {
-        DeviceImage::Cpu(image) => {
-            util::convert_color_for_record(image_header, do_ycbcr, image, pool)
-        }
-        DeviceImage::Gpu(_) => {
-            kernels::run_color_for_record_on_gpu(image_header, do_ycbcr, fb, pool)
-        }
+    if availability::run_color_for_record_available(image_header, do_ycbcr, fb, options, env) {
+        return kernels::run_color_for_record_on_gpu(image_header, do_ycbcr, fb, pool);
     }
+
+    let image = fb
+        .ensure_cpu()
+        .expect("image must be CPU-resident when color-for-record GPU kernel is unavailable");
+    util::convert_color_for_record(image_header, do_ycbcr, image, pool)
 }
