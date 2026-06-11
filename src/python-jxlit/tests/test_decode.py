@@ -3,7 +3,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from jxlit import DecodeOptions, decode
+from jxlit import DecodeOptions, PixelLayout, decode
 
 ASSETS_DIR = Path(__file__).resolve().parents[3] / "assets"
 JXL_FIXTURE = ASSETS_DIR / "colors_e1_d0p5_fd4.jxl"
@@ -57,6 +57,20 @@ def test_decode_telemetry_collects_measures() -> None:
 
     inner_decode = next(m for m in telemetry.measures if m.name == "decode")
     assert inner_decode.start_ms > 0
+
+
+def test_decode_planar_matches_interleaved() -> None:
+    data = JXL_FIXTURE.read_bytes()
+    interleaved = decode(data)
+    planar = decode(data, options=DecodeOptions(layout=PixelLayout.PLANAR))
+
+    assert planar.pixels.shape == (
+        interleaved.channels,
+        interleaved.height,
+        interleaved.width,
+    )
+    hwc = np.transpose(planar.pixels, (1, 2, 0))
+    np.testing.assert_array_equal(hwc, interleaved.pixels)
 
 
 def test_decode_rejects_non_bytes_like() -> None:

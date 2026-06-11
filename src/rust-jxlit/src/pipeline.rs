@@ -38,5 +38,5 @@ pub fn decode(input: &[u8], options: &DecodeOptions) -> Result<DecodedImage, Dec
     parse::frames::read_frames(&mut container.render_context, &codestream[frame_offset..])?;
 
     let keyframe_index = 0;
-    render::frame::render_frame(&container, keyframe_index)
+    render::frame::render_frame(&container, keyframe_index, options)
 }

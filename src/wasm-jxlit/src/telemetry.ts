@@ -39,7 +39,9 @@ export function rebaseTelemetry(
   };
 }
 
-export function telemetryToJson(telemetry: DecodeTelemetry): Record<string, unknown> {
+export function telemetryToJson(
+  telemetry: DecodeTelemetry,
+): Record<string, unknown> {
   return {
     timebase: telemetry.timebase,
     total_ms: telemetry.totalMs,
@@ -56,7 +58,9 @@ export function printPhaseSummary(
   lang: string,
   topN = 10,
 ): void {
-  const outer = telemetry.measures.find((measure) => measure.name.endsWith("_decode"));
+  const outer = telemetry.measures.find((measure) =>
+    measure.name.endsWith("_decode"),
+  );
   const totalMs = outer?.durationMs ?? telemetry.totalMs;
   const ranked = [...telemetry.measures]
     .sort((a, b) => b.durationMs - a.durationMs)
@@ -64,6 +68,8 @@ export function printPhaseSummary(
   console.error(`\n== phase breakdown (${lang}) ==`);
   for (const measure of ranked) {
     const pct = totalMs > 0 ? (100 * measure.durationMs) / totalMs : 0;
-    console.error(`${measure.name.padEnd(16)} ${measure.durationMs.toFixed(2).padStart(8)}ms ${pct.toFixed(1).padStart(6)}%`);
+    console.error(
+      `${measure.name.padEnd(16)} ${measure.durationMs.toFixed(2).padStart(8)}ms ${pct.toFixed(1).padStart(6)}%`,
+    );
   }
 }

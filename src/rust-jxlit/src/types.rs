@@ -4,6 +4,16 @@ use std::fmt;
 
 use jxl_threadpool::JxlThreadPool;
 
+/// Output pixel buffer layout for decoded samples.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum PixelLayout {
+    /// Interleaved height-width-channel (HWC) order.
+    #[default]
+    Interleaved,
+    /// Planar channel-height-width (CHW) order.
+    Planar,
+}
+
 /// Options controlling decode behavior.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct DecodeOptions {
@@ -11,6 +21,8 @@ pub struct DecodeOptions {
     pub threads: Option<usize>,
     /// When true, collect per-phase timing measures in decode metadata.
     pub telemetry: bool,
+    /// Flat `pixels` layout: interleaved HWC (default) or planar CHW.
+    pub layout: PixelLayout,
 }
 
 /// A single flat phase timing measure.
@@ -61,10 +73,7 @@ impl DecodeMetadata {
         telemetry: Option<DecodeTelemetry>,
     ) -> Self {
         Self {
-            jxlit: JxlitMeta {
-                version,
-                telemetry,
-            },
+            jxlit: JxlitMeta { version, telemetry },
         }
     }
 }
@@ -85,7 +94,7 @@ pub(crate) fn pool_for_options(options: &DecodeOptions) -> JxlThreadPool {
     }
 }
 
-/// A decoded image in interleaved (HWC) `f32` form.
+/// A decoded image as a flat `f32` buffer (HWC when interleaved, CHW when planar).
 #[derive(Debug, Clone, PartialEq)]
 pub struct DecodedImage {
     pub height: usize,

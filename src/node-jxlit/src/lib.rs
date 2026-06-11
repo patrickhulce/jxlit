@@ -5,6 +5,17 @@ use napi_derive::napi;
 pub struct DecodeOptions {
     pub threads: Option<u32>,
     pub telemetry: Option<bool>,
+    pub layout: Option<String>,
+}
+
+fn layout_from_napi(layout: Option<String>) -> napi::Result<jxlit::PixelLayout> {
+    match layout.as_deref() {
+        None | Some("interleaved") => Ok(jxlit::PixelLayout::Interleaved),
+        Some("planar") => Ok(jxlit::PixelLayout::Planar),
+        Some(other) => Err(Error::from_reason(format!(
+            "invalid layout: {other} (expected \"interleaved\" or \"planar\")"
+        ))),
+    }
 }
 
 #[napi(object)]
@@ -42,13 +53,14 @@ pub struct DecodedImage {
     pub metadata: DecodeMetadata,
 }
 
-fn decode_options_from_napi(options: Option<DecodeOptions>) -> jxlit::DecodeOptions {
+fn decode_options_from_napi(options: Option<DecodeOptions>) -> napi::Result<jxlit::DecodeOptions> {
     match options {
-        Some(opts) => jxlit::DecodeOptions {
+        Some(opts) => Ok(jxlit::DecodeOptions {
             threads: opts.threads.map(|n| n as usize),
             telemetry: opts.telemetry.unwrap_or(false),
-        },
-        None => jxlit::DecodeOptions::default(),
+            layout: layout_from_napi(opts.layout)?,
+        }),
+        None => Ok(jxlit::DecodeOptions::default()),
     }
 }
 
@@ -64,11 +76,7 @@ fn telemetry_from_rust(telemetry: &jxlit::DecodeTelemetry) -> DecodeTelemetry {
     DecodeTelemetry {
         rust_timebase: telemetry.rust_timebase,
         total_ms: telemetry.total_ms,
-        measures: telemetry
-            .measures
-            .iter()
-            .map(measure_from_rust)
-            .collect(),
+        measures: telemetry.measures.iter().map(measure_from_rust).collect(),
     }
 }
 
@@ -87,7 +95,7 @@ fn metadata_from_rust(metadata: &jxlit::DecodeMetadata) -> DecodeMetadata {
 
 #[napi]
 pub fn decode(input: Buffer, options: Option<DecodeOptions>) -> Result<DecodedImage> {
-    let decode_options = decode_options_from_napi(options);
+    let decode_options = decode_options_from_napi(options)?;
     let decoded = jxlit::decode_with_options(input.as_ref(), &decode_options)
         .map_err(|e| Error::from_reason(e.to_string()))?;
     Ok(DecodedImage {

@@ -100,6 +100,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Disable post-loop phase telemetry collection",
     )
+    parser.add_argument(
+        "--layout",
+        choices=("interleaved", "planar"),
+        default="interleaved",
+        help="Pixel buffer layout (default: interleaved)",
+    )
     return parser.parse_args()
 
 
@@ -138,6 +144,7 @@ def build_command(
     iterations: int,
     threads: int | None,
     no_telemetry: bool,
+    layout: str,
 ) -> list[str]:
     common = [
         "--file",
@@ -146,6 +153,8 @@ def build_command(
         action,
         "--iterations",
         str(iterations),
+        "--layout",
+        layout,
     ]
     if threads is not None:
         common.extend(["--threads", str(threads)])
@@ -182,8 +191,11 @@ def run_worker(
     iterations: int,
     threads: int | None,
     no_telemetry: bool,
+    layout: str,
 ) -> WorkerResult:
-    command = build_command(lang, file_path, action, iterations, threads, no_telemetry)
+    command = build_command(
+        lang, file_path, action, iterations, threads, no_telemetry, layout
+    )
     if lang == "python":
         cwd = REPO_ROOT / "src" / "python-jxlit"
     elif lang in {"node", "wasm"}:
@@ -283,6 +295,7 @@ def run_language_batch(
     workers: int,
     threads: int | None,
     no_telemetry: bool,
+    layout: str,
 ) -> tuple[LanguageSummary, dict[str, Any] | None]:
     batch_start = time.perf_counter()
     results: list[WorkerResult] = []
@@ -297,6 +310,7 @@ def run_language_batch(
                 iterations,
                 threads,
                 no_telemetry,
+                layout,
             )
             for _ in range(workers)
         ]
@@ -461,7 +475,8 @@ def main() -> None:
     print(
         f"benchmark action={args.action} file={file_path.name} "
         f"iterations/worker={args.iterations} workers={args.workers} "
-        f"threads={args.threads if args.threads is not None else 'auto'}"
+        f"threads={args.threads if args.threads is not None else 'auto'} "
+        f"layout={args.layout}"
     )
 
     summaries: list[LanguageSummary] = []
@@ -475,6 +490,7 @@ def main() -> None:
             workers=args.workers,
             threads=args.threads,
             no_telemetry=args.no_telemetry,
+            layout=args.layout,
         )
         summaries.append(summary)
         print_language_summary(summary)

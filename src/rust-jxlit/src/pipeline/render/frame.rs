@@ -19,13 +19,16 @@ use crate::vendor::jxl_frame::data::{LfGlobal, LfGlobalVarDct, LfGroup};
 use crate::vendor::jxl_frame::header::Encoding;
 use crate::vendor::jxl_render::{
     Error, ImageBuffer, ImageWithRegion, IndexedFrame, Reference, ReferenceFrames, Region,
-    RenderCache, RenderContext, Result,
+    RenderCache, RenderContext, Result, features,
 };
 
+use crate::pipeline::process::export::{
+    analyze_planar_memcpy, export_planar_memcpy, export_planar_sample,
+};
 use crate::pipeline::process::interleave::{SpotColor, run_interleave};
 use crate::pipeline::structs::container::ContainerCtx;
 use crate::pipeline::{decode, parse, process, render};
-use crate::types::DecodeMetadata;
+use crate::types::{DecodeMetadata, DecodeOptions, PixelLayout};
 use crate::{DecodeError, DecodedImage};
 
 /// A rendered keyframe in planar form, plus the metadata needed to interleave.
@@ -46,6 +49,7 @@ pub struct RenderedFrame {
 pub fn render_frame(
     container: &ContainerCtx,
     keyframe_index: usize,
+    options: &DecodeOptions,
 ) -> std::result::Result<DecodedImage, DecodeError> {
     let _render = crate::phase_guard!("render");
     let ctx = &container.render_context;
@@ -80,13 +84,82 @@ pub fn render_frame(
         render_spot_color: !metadata.grayscale(),
     };
 
-    build_decoded_image(&rendered)
+    build_decoded_image(&rendered, options)
+}
+
+/// Fuses spot-color extra channels into RGB grids in place when possible.
+fn fuse_spot_colors(
+    rendered: &RenderedFrame,
+) -> std::result::Result<(Arc<ImageWithRegion>, bool), DecodeError> {
+    if !rendered.render_spot_color {
+        return Ok((Arc::clone(&rendered.image), false));
+    }
+
+    let color_channels = rendered.image.color_channels();
+    if color_channels != 3 {
+        return Ok((Arc::clone(&rendered.image), false));
+    }
+
+    let has_spots = rendered
+        .extra_channels
+        .iter()
+        .any(|(ec, _)| matches!(ec, ExtraChannelType::SpotColour { .. }));
+    if !has_spots {
+        return Ok((Arc::clone(&rendered.image), false));
+    }
+
+    let mut image = Arc::try_unwrap(Arc::clone(&rendered.image)).unwrap_or_else(|arc| {
+        arc.try_clone()
+            .map_err(|e| DecodeError::new(e.to_string()))
+            .expect("clone rendered image for spot fusion")
+    });
+
+    image
+        .convert_modular_color(rendered.color_bit_depth)
+        .map_err(|e| DecodeError::new(e.to_string()))?;
+
+    for (ec_idx, (ec_ty, ec_bit_depth)) in rendered.extra_channels.iter().enumerate() {
+        let ExtraChannelType::SpotColour { .. } = ec_ty else {
+            continue;
+        };
+        let spot_buf_idx = color_channels + ec_idx;
+
+        {
+            let spot_buf = &mut image.buffer_mut()[spot_buf_idx];
+            spot_buf
+                .convert_to_float_modular(*ec_bit_depth)
+                .map_err(|e| DecodeError::new(e.to_string()))?;
+        }
+
+        let (prefix, suffix) = image.buffer_mut().split_at_mut(spot_buf_idx);
+        let (color_bufs, _) = prefix.split_at_mut(color_channels);
+        let spot_buf = &suffix[0];
+
+        let spot_grid = spot_buf
+            .as_float()
+            .expect("spot channel must be F32 after conversion");
+        let (c0, rest) = color_bufs.split_at_mut(1);
+        let (c1, c2) = rest.split_at_mut(1);
+        let color_grids: [&mut AlignedGrid<f32>; 3] = [
+            c0[0].as_float_mut().expect("color channel 0 F32"),
+            c1[0].as_float_mut().expect("color channel 1 F32"),
+            c2[0].as_float_mut().expect("color channel 2 F32"),
+        ];
+
+        features::render_spot_color(color_grids, spot_grid, ec_ty)
+            .map_err(|e| DecodeError::new(e.to_string()))?;
+    }
+
+    Ok((Arc::new(image), true))
 }
 
 /// Computes the output layout, selects the color/black/alpha/spot channels,
-/// allocates the HWC buffer, and runs the interleave transform
-/// ([`run_interleave`]), wrapping the result into a [`DecodedImage`].
-fn build_decoded_image(rendered: &RenderedFrame) -> std::result::Result<DecodedImage, DecodeError> {
+/// allocates the pixel buffer, and runs the export transform, wrapping the
+/// result into a [`DecodedImage`].
+fn build_decoded_image(
+    rendered: &RenderedFrame,
+    options: &DecodeOptions,
+) -> std::result::Result<DecodedImage, DecodeError> {
     let _build_decoded_image = crate::phase_guard!("build_decoded_image");
     let orientation = rendered.orientation;
     debug_assert!((1..=8).contains(&orientation));
@@ -101,7 +174,7 @@ fn build_decoded_image(rendered: &RenderedFrame) -> std::result::Result<DecodedI
         std::mem::swap(&mut width, &mut height);
     }
 
-    let image = &rendered.image;
+    let (image, spots_fused) = fuse_spot_colors(rendered)?;
     let fb = image.buffer();
     let color_channels = image.color_channels();
     let regions_and_shifts = image.regions_and_shifts();
@@ -109,13 +182,15 @@ fn build_decoded_image(rendered: &RenderedFrame) -> std::result::Result<DecodedI
     let mut grids: Vec<&ImageBuffer> = fb[..color_channels].iter().collect();
     let mut bit_depth = vec![rendered.color_bit_depth; grids.len()];
     let mut start_offset_xy: Vec<(i32, i32)> = Vec::new();
-    for (region, _) in &regions_and_shifts[..color_channels] {
+    let mut grid_shifts: Vec<ChannelShift> = Vec::new();
+    for (region, shift) in &regions_and_shifts[..color_channels] {
         start_offset_xy.push((left - region.left, top - region.top));
+        grid_shifts.push(*shift);
     }
 
     // Black channel (CMYK only).
     if rendered.is_cmyk {
-        for (ec_idx, (ec, (region, _))) in rendered
+        for (ec_idx, (ec, (region, shift))) in rendered
             .extra_channels
             .iter()
             .zip(&regions_and_shifts[color_channels..])
@@ -125,13 +200,14 @@ fn build_decoded_image(rendered: &RenderedFrame) -> std::result::Result<DecodedI
                 grids.push(&fb[color_channels + ec_idx]);
                 bit_depth.push(ec.1);
                 start_offset_xy.push((left - region.left, top - region.top));
+                grid_shifts.push(*shift);
                 break;
             }
         }
     }
 
     // Alpha channel (the `stream()` variant includes alpha).
-    for (ec_idx, (ec, (region, _))) in rendered
+    for (ec_idx, (ec, (region, shift))) in rendered
         .extra_channels
         .iter()
         .zip(&regions_and_shifts[color_channels..])
@@ -141,13 +217,14 @@ fn build_decoded_image(rendered: &RenderedFrame) -> std::result::Result<DecodedI
             grids.push(&fb[color_channels + ec_idx]);
             bit_depth.push(ec.1);
             start_offset_xy.push((left - region.left, top - region.top));
+            grid_shifts.push(*shift);
             break;
         }
     }
 
-    // Spot colors (only mixed into RGB color channels).
+    // Spot colors (only mixed into RGB color channels when not fused earlier).
     let mut spot_colors = Vec::new();
-    if rendered.render_spot_color && color_channels == 3 {
+    if !spots_fused && rendered.render_spot_color && color_channels == 3 {
         for (ec_idx, (ec, (region, _))) in rendered
             .extra_channels
             .iter()
@@ -175,18 +252,47 @@ fn build_decoded_image(rendered: &RenderedFrame) -> std::result::Result<DecodedI
     let channels = grids.len();
     let width_us = width as usize;
     let height_us = height as usize;
-    let mut pixels = vec![0.0f32; width_us * height_us * channels];
+    let plane_size = width_us * height_us;
+    let mut pixels = vec![0.0f32; plane_size * channels];
 
-    let count = run_interleave(
-        &mut pixels,
-        &grids,
-        &bit_depth,
-        &start_offset_xy,
-        &spot_colors,
-        orientation,
-        width,
-        height,
-    );
+    let count = match options.layout {
+        PixelLayout::Interleaved => run_interleave(
+            &mut pixels,
+            &grids,
+            &bit_depth,
+            &start_offset_xy,
+            &spot_colors,
+            orientation,
+            width,
+            height,
+        ),
+        PixelLayout::Planar => {
+            if let Some(memcpy) = analyze_planar_memcpy(
+                &grids,
+                &start_offset_xy,
+                &grid_shifts,
+                orientation,
+                width_us,
+                height_us,
+                spots_fused,
+                !spot_colors.is_empty(),
+            ) {
+                export_planar_memcpy(&mut pixels, &memcpy.channels, plane_size);
+                pixels.len()
+            } else {
+                export_planar_sample(
+                    &mut pixels,
+                    &grids,
+                    &bit_depth,
+                    &start_offset_xy,
+                    &spot_colors,
+                    orientation,
+                    width,
+                    height,
+                )
+            }
+        }
+    };
 
     if count != pixels.len() {
         return Err(DecodeError::new(format!(

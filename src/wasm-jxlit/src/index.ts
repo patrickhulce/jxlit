@@ -11,10 +11,13 @@ import {
   type NativeDecodeTelemetry,
 } from "./telemetry.js";
 
+export type PixelLayout = "interleaved" | "planar";
+
 export interface DecodeOptions {
   /** Ignored on WASM; threading is not available in this build. */
   threads?: number;
   telemetry?: boolean;
+  layout?: PixelLayout;
 }
 
 export type { DecodeTelemetry, Measure };
@@ -95,18 +98,19 @@ export function decode(
       : new DecodeOptionsNative(
           options.threads ?? undefined,
           options.telemetry ?? false,
+          options.layout ?? undefined,
         );
 
   const timebase = telemetry ? unixTimeMs() : 0;
   const start = telemetry ? performance.now() : 0;
 
   const decoded = decodeNative(input, nativeOptions);
-  const wallMs = telemetry ? performance.now() - start : 0;
 
   const height = decoded.height;
   const width = decoded.width;
   const channels = decoded.channels;
   const pixels = new Float32Array(decoded.pixels);
+  const wallMs = telemetry ? performance.now() - start : 0;
   const metadata = telemetry
     ? rebaseMetadata(decoded.metadata, timebase, wallMs)
     : metadataFromNative(decoded.metadata);

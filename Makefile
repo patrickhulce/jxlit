@@ -11,7 +11,7 @@ WORKERS ?= 2
 THREADS ?= 2
 ITERATIONS ?= 25
 FILE ?= assets/frame_4K_10bit_e1_d0p5_fd4.jxl
-BENCHMARK_ARGS = --workers $(WORKERS) --iterations $(ITERATIONS) --file $(FILE) --threads $(THREADS)
+BENCHMARK_ARGS = --workers $(WORKERS) --iterations $(ITERATIONS) --file $(FILE) --threads $(THREADS) $(if $(filter planar,$(LAYOUT)),--layout planar,)
 
 all: build lint typecheck test
 

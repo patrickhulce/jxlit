@@ -1,9 +1,10 @@
 from jxlit._core import (
+    DecodedImage,
     DecodeOptions,
     DecodeTelemetry,
-    DecodedImage,
     JxlitMeta,
     Measure,
+    PixelLayout,
     decode,
 )
 
@@ -13,5 +14,6 @@ __all__ = [
     "DecodedImage",
     "JxlitMeta",
     "Measure",
+    "PixelLayout",
     "decode",
 ]

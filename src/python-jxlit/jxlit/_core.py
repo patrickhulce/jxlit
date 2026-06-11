@@ -4,13 +4,28 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
+from enum import Enum
 
 import numpy as np
 from numpy.typing import NDArray
 
-from jxlit._jxlit import DecodeOptions as _DecodeOptionsNative
 from jxlit._jxlit import DecodedImage as _DecodedImageNative
+from jxlit._jxlit import DecodeOptions as _DecodeOptionsNative
+from jxlit._jxlit import PixelLayout as _PixelLayoutNative
 from jxlit._jxlit import decode as _decode_native
+
+
+class PixelLayout(Enum):
+    """Flat pixel buffer layout."""
+
+    INTERLEAVED = "interleaved"
+    PLANAR = "planar"
+
+
+def _native_layout(layout: PixelLayout) -> _PixelLayoutNative:
+    if layout is PixelLayout.PLANAR:
+        return _PixelLayoutNative.Planar
+    return _PixelLayoutNative.Interleaved
 
 
 @dataclass(frozen=True)
@@ -19,6 +34,7 @@ class DecodeOptions:
 
     threads: int | None = None
     telemetry: bool = False
+    layout: PixelLayout = PixelLayout.INTERLEAVED
 
 
 @dataclass(frozen=True)
@@ -149,14 +165,32 @@ def decode(data: bytes, *, options: DecodeOptions | None = None) -> DecodedImage
         native_options = _DecodeOptionsNative(
             threads=options.threads,
             telemetry=options.telemetry,
+            layout=_native_layout(options.layout),
         )
 
     if telemetry:
         timebase = time.time_ns() / 1_000_000.0
         start = time.perf_counter_ns()
         decoded = _decode_native(bytes(data), options=native_options)
+        jxlit_meta = decoded.metadata._jxlit
+        pixels = decoded.pixels
         wall_ms = (time.perf_counter_ns() - start) / 1_000_000.0
-        return _decoded_image_from_native(decoded, timebase=timebase, wall_ms=wall_ms)
+        return DecodedImage(
+            height=decoded.height,
+            width=decoded.width,
+            channels=decoded.channels,
+            pixels=pixels,
+            metadata={
+                "_jxlit": JxlitMeta(
+                    version=jxlit_meta.version,
+                    telemetry=_telemetry_from_native(
+                        jxlit_meta.telemetry,
+                        timebase=timebase,
+                        wall_ms=wall_ms,
+                    ),
+                )
+            },
+        )
 
     decoded = _decode_native(bytes(data), options=native_options)
     return _decoded_image_from_native(decoded)
@@ -178,14 +212,26 @@ def telemetry_to_dict(telemetry: DecodeTelemetry) -> dict[str, object]:
     }
 
 
-def print_phase_summary(telemetry: DecodeTelemetry, *, lang: str, top_n: int = 10) -> None:
+def print_phase_summary(
+    telemetry: DecodeTelemetry,
+    *,
+    lang: str,
+    top_n: int = 10,
+) -> None:
     """Print the largest phases to stderr."""
     import sys
 
     outer = next((m for m in telemetry.measures if m.name.endswith("_decode")), None)
     total_ms = outer.duration_ms if outer is not None else telemetry.total_ms
-    ranked = sorted(telemetry.measures, key=lambda m: m.duration_ms, reverse=True)[:top_n]
+    ranked = sorted(
+        telemetry.measures,
+        key=lambda m: m.duration_ms,
+        reverse=True,
+    )[:top_n]
     print(f"\n== phase breakdown ({lang}) ==", file=sys.stderr)
     for measure in ranked:
         pct = 100.0 * measure.duration_ms / total_ms if total_ms else 0.0
-        print(f"{measure.name:<16} {measure.duration_ms:8.2f}ms {pct:6.1f}%", file=sys.stderr)
+        print(
+            f"{measure.name:<16} {measure.duration_ms:8.2f}ms {pct:6.1f}%",
+            file=sys.stderr,
+        )

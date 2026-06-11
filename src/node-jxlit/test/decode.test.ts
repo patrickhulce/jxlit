@@ -55,16 +55,9 @@ test("decode colors fixture is close to png", () => {
   assert.equal(decoded.height, expected.height);
   assert.equal(decoded.width, expected.width);
   assert.equal(decoded.channels, expected.channels);
-  assert.deepEqual(decoded.pixels.shape, [
-    expected.height,
-    expected.width,
-    expected.channels,
-  ]);
+  assert.equal(decoded.pixels.length, expected.pixels.length);
 
-  const mae = meanAbsError(
-    decoded.pixels.data as Float32Array,
-    expected.pixels,
-  );
+  const mae = meanAbsError(decoded.pixels, expected.pixels);
   assert.ok(
     mae < MAE_TOLERANCE,
     `mean absolute error ${mae} exceeds ${MAE_TOLERANCE}`,

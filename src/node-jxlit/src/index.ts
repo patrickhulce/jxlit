@@ -1,4 +1,3 @@
-import * as np from "numpy-ts";
 import { hrtime } from "node:process";
 
 import { decode as decodeNative } from "../binding.js";
@@ -11,9 +10,12 @@ import {
   type NativeDecodeTelemetry,
 } from "./telemetry.js";
 
+export type PixelLayout = "interleaved" | "planar";
+
 export interface DecodeOptions {
   threads?: number;
   telemetry?: boolean;
+  layout?: PixelLayout;
 }
 
 export type { DecodeTelemetry, Measure };
@@ -31,7 +33,7 @@ export interface DecodedImage {
   height: number;
   width: number;
   channels: number;
-  pixels: np.NDArray;
+  pixels: Float32Array;
   metadata: DecodeMetadata;
 }
 
@@ -49,7 +51,9 @@ function rebaseMetadata(
   timebase: number,
   wallMs: number,
 ): DecodeMetadata {
-  const nativeTelemetry = metadata._jxlit.telemetry as NativeDecodeTelemetry | undefined;
+  const nativeTelemetry = metadata._jxlit.telemetry as
+    | NativeDecodeTelemetry
+    | undefined;
   if (nativeTelemetry === undefined) {
     return metadataFromNative(metadata);
   }
@@ -68,7 +72,7 @@ function rebaseMetadata(
 }
 
 /**
- * Decode JPEG XL bytes into an f32 HWC pixel array.
+ * Decode JPEG XL bytes into an f32 pixel buffer.
  *
  * This is the idiomatic Node.js entry point. The native binding lives in
  * `binding.js` and should not be imported directly.
@@ -79,14 +83,9 @@ export function decode(input: Buffer, options?: DecodeOptions): DecodedImage {
   const start = telemetry ? hrtime.bigint() : 0n;
 
   const decoded = decodeNative(input, options);
-  const wallMs = telemetry
-    ? Number(hrtime.bigint() - start) / 1_000_000
-    : 0;
+  const pixels = decoded.pixels;
 
-  const pixels = np
-    .array(decoded.pixels, "float32")
-    .reshape(decoded.height, decoded.width, decoded.channels);
-
+  const wallMs = telemetry ? Number(hrtime.bigint() - start) / 1_000_000 : 0;
   const metadata = telemetry
     ? rebaseMetadata(decoded.metadata, timebase, wallMs)
     : metadataFromNative(decoded.metadata);

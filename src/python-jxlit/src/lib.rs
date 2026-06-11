@@ -2,6 +2,23 @@ use numpy::ndarray::Array3;
 use numpy::{IntoPyArray, PyArray3};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[pyclass(eq, eq_int)]
+enum PixelLayout {
+    Interleaved,
+    Planar,
+}
+
+impl From<PixelLayout> for jxlit::PixelLayout {
+    fn from(layout: PixelLayout) -> Self {
+        match layout {
+            PixelLayout::Interleaved => jxlit::PixelLayout::Interleaved,
+            PixelLayout::Planar => jxlit::PixelLayout::Planar,
+        }
+    }
+}
+
 #[pyclass]
 #[derive(Clone, Copy)]
 struct DecodeOptions {
@@ -9,14 +26,20 @@ struct DecodeOptions {
     threads: Option<usize>,
     #[pyo3(get, set)]
     telemetry: bool,
+    #[pyo3(get, set)]
+    layout: PixelLayout,
 }
 
 #[pymethods]
 impl DecodeOptions {
     #[new]
-    #[pyo3(signature = (threads=None, telemetry=false))]
-    fn new(threads: Option<usize>, telemetry: bool) -> Self {
-        Self { threads, telemetry }
+    #[pyo3(signature = (threads=None, telemetry=false, layout=PixelLayout::Interleaved))]
+    fn new(threads: Option<usize>, telemetry: bool, layout: PixelLayout) -> Self {
+        Self {
+            threads,
+            telemetry,
+            layout,
+        }
     }
 }
 
@@ -84,6 +107,7 @@ fn decode_options_from_py(options: Option<DecodeOptions>) -> jxlit::DecodeOption
         Some(opts) => jxlit::DecodeOptions {
             threads: opts.threads,
             telemetry: opts.telemetry,
+            layout: opts.layout.into(),
         },
         None => jxlit::DecodeOptions::default(),
     }
@@ -101,11 +125,7 @@ fn telemetry_from_rust(telemetry: &jxlit::DecodeTelemetry) -> DecodeTelemetry {
     DecodeTelemetry {
         rust_timebase: telemetry.rust_timebase,
         total_ms: telemetry.total_ms,
-        measures: telemetry
-            .measures
-            .iter()
-            .map(measure_from_rust)
-            .collect(),
+        measures: telemetry.measures.iter().map(measure_from_rust).collect(),
     }
 }
 
@@ -122,12 +142,16 @@ fn metadata_from_rust(metadata: &jxlit::DecodeMetadata) -> DecodeMetadata {
     }
 }
 
-fn decoded_image_from_rust(decoded: jxlit::DecodedImage) -> PyResult<DecodedImage> {
-    let array = Array3::from_shape_vec(
-        (decoded.height, decoded.width, decoded.channels),
-        decoded.pixels,
-    )
-    .map_err(|e| PyValueError::new_err(e.to_string()))?;
+fn decoded_image_from_rust(
+    decoded: jxlit::DecodedImage,
+    layout: jxlit::PixelLayout,
+) -> PyResult<DecodedImage> {
+    let shape = match layout {
+        jxlit::PixelLayout::Interleaved => (decoded.height, decoded.width, decoded.channels),
+        jxlit::PixelLayout::Planar => (decoded.channels, decoded.height, decoded.width),
+    };
+    let array = Array3::from_shape_vec(shape, decoded.pixels)
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(DecodedImage {
         height: decoded.height,
         width: decoded.width,
@@ -141,13 +165,15 @@ fn decoded_image_from_rust(decoded: jxlit::DecodedImage) -> PyResult<DecodedImag
 #[pyo3(signature = (data, *, options=None))]
 fn decode(data: &[u8], options: Option<DecodeOptions>) -> PyResult<DecodedImage> {
     let decode_options = decode_options_from_py(options);
+    let layout = decode_options.layout;
     let decoded = jxlit::decode_with_options(data, &decode_options)
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    decoded_image_from_rust(decoded)
+    decoded_image_from_rust(decoded, layout)
 }
 
 #[pymodule]
 fn _jxlit(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<PixelLayout>()?;
     m.add_class::<DecodeOptions>()?;
     m.add_class::<Measure>()?;
     m.add_class::<DecodeTelemetry>()?;

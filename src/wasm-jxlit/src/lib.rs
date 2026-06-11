@@ -4,13 +4,32 @@ use wasm_bindgen::prelude::*;
 pub struct DecodeOptions {
     threads: Option<usize>,
     telemetry: bool,
+    layout: jxlit::PixelLayout,
+}
+
+fn layout_from_wasm(layout: Option<String>) -> Result<jxlit::PixelLayout, JsError> {
+    match layout.as_deref() {
+        None | Some("interleaved") => Ok(jxlit::PixelLayout::Interleaved),
+        Some("planar") => Ok(jxlit::PixelLayout::Planar),
+        Some(other) => Err(JsError::new(&format!(
+            "invalid layout: {other} (expected \"interleaved\" or \"planar\")"
+        ))),
+    }
 }
 
 #[wasm_bindgen]
 impl DecodeOptions {
     #[wasm_bindgen(constructor)]
-    pub fn new(threads: Option<usize>, telemetry: bool) -> Self {
-        Self { threads, telemetry }
+    pub fn new(
+        threads: Option<usize>,
+        telemetry: bool,
+        layout: Option<String>,
+    ) -> Result<DecodeOptions, JsError> {
+        Ok(Self {
+            threads,
+            telemetry,
+            layout: layout_from_wasm(layout)?,
+        })
     }
 }
 
@@ -113,19 +132,23 @@ impl DecodeMetadata {
     pub fn jxlit(&self) -> JxlitMeta {
         JxlitMeta {
             version: self.jxlit.version.clone(),
-            telemetry: self.jxlit.telemetry.as_ref().map(|telemetry| DecodeTelemetry {
-                rust_timebase: telemetry.rust_timebase,
-                total_ms: telemetry.total_ms,
-                measures: telemetry
-                    .measures
-                    .iter()
-                    .map(|measure| Measure {
-                        name: measure.name.clone(),
-                        start_ms: measure.start_ms,
-                        duration_ms: measure.duration_ms,
-                    })
-                    .collect(),
-            }),
+            telemetry: self
+                .jxlit
+                .telemetry
+                .as_ref()
+                .map(|telemetry| DecodeTelemetry {
+                    rust_timebase: telemetry.rust_timebase,
+                    total_ms: telemetry.total_ms,
+                    measures: telemetry
+                        .measures
+                        .iter()
+                        .map(|measure| Measure {
+                            name: measure.name.clone(),
+                            start_ms: measure.start_ms,
+                            duration_ms: measure.duration_ms,
+                        })
+                        .collect(),
+                }),
         }
     }
 }
@@ -166,12 +189,8 @@ impl DecodedImage {
         DecodeMetadata {
             jxlit: JxlitMeta {
                 version: self.metadata.jxlit.version.clone(),
-                telemetry: self
-                    .metadata
-                    .jxlit
-                    .telemetry
-                    .as_ref()
-                    .map(|telemetry| DecodeTelemetry {
+                telemetry: self.metadata.jxlit.telemetry.as_ref().map(|telemetry| {
+                    DecodeTelemetry {
                         rust_timebase: telemetry.rust_timebase,
                         total_ms: telemetry.total_ms,
                         measures: telemetry
@@ -183,7 +202,8 @@ impl DecodedImage {
                                 duration_ms: measure.duration_ms,
                             })
                             .collect(),
-                    }),
+                    }
+                }),
             },
         }
     }
@@ -201,11 +221,7 @@ fn telemetry_from_rust(telemetry: &jxlit::DecodeTelemetry) -> DecodeTelemetry {
     DecodeTelemetry {
         rust_timebase: telemetry.rust_timebase,
         total_ms: telemetry.total_ms,
-        measures: telemetry
-            .measures
-            .iter()
-            .map(measure_from_rust)
-            .collect(),
+        measures: telemetry.measures.iter().map(measure_from_rust).collect(),
     }
 }
 
@@ -228,6 +244,7 @@ pub fn decode(input: &[u8], options: Option<DecodeOptions>) -> Result<DecodedIma
         Some(opts) => jxlit::DecodeOptions {
             threads: opts.threads,
             telemetry: opts.telemetry,
+            layout: opts.layout,
         },
         None => jxlit::DecodeOptions::default(),
     };

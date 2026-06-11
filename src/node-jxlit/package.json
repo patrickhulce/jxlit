@@ -23,9 +23,6 @@
     "format": "prettier --write .",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.test.json"
   },
-  "dependencies": {
-    "numpy-ts": "^1.0.0"
-  },
   "devDependencies": {
     "@eslint/js": "^9.17.0",
     "@napi-rs/cli": "^2.18.4",

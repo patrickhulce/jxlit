@@ -87,12 +87,7 @@ mod storage {
     }
 
     pub fn epoch() -> Option<Instant> {
-        COLLECTOR.with(|collector| {
-            collector
-                .borrow()
-                .as_ref()
-                .map(|collector| collector.epoch)
-        })
+        COLLECTOR.with(|collector| collector.borrow().as_ref().map(|collector| collector.epoch))
     }
 
     pub fn push_measure(name: &'static str, start: Instant, epoch: Instant) {
@@ -111,10 +106,13 @@ mod storage {
 
     pub fn take() -> MeasureCollector {
         COLLECTOR.with(|collector| {
-            collector.borrow_mut().take().unwrap_or_else(|| MeasureCollector {
-                epoch: Instant::now(),
-                measures: Vec::new(),
-            })
+            collector
+                .borrow_mut()
+                .take()
+                .unwrap_or_else(|| MeasureCollector {
+                    epoch: Instant::now(),
+                    measures: Vec::new(),
+                })
         })
     }
 }
@@ -212,9 +210,7 @@ pub fn rebase_telemetry(
 /// Enters a phase measure when telemetry is enabled.
 #[macro_export]
 macro_rules! phase_guard {
-    ($name:literal) => {{
-        $crate::telemetry::enter_phase($name)
-    }};
+    ($name:literal) => {{ $crate::telemetry::enter_phase($name) }};
 }
 
 #[cfg(test)]

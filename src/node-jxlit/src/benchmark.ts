@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
 
-import { decode } from "./index.js";
+import { decode, type PixelLayout } from "./index.js";
 import { printPhaseSummary, telemetryToJson } from "./telemetry.js";
 
 const WARMUP_DECODES = 3;
@@ -41,6 +41,7 @@ interface Options {
   action: string;
   iterations: number;
   threads?: number;
+  layout: PixelLayout;
   noTelemetry: boolean;
 }
 
@@ -49,6 +50,7 @@ function parseArgs(argv: string[]): Options {
   let action = "decode_cpu";
   let iterations = DEFAULT_ITERATIONS;
   let threads: number | undefined;
+  let layout: PixelLayout = "interleaved";
   let noTelemetry = false;
 
   for (let i = 0; i < argv.length; i++) {
@@ -68,6 +70,16 @@ function parseArgs(argv: string[]): Options {
       case "--threads": {
         const value = argv[++i];
         threads = Number.parseInt(value ?? "", 10);
+        break;
+      }
+      case "--layout": {
+        const value = argv[++i];
+        if (value === "interleaved" || value === "planar") {
+          layout = value;
+        } else {
+          console.error(`invalid --layout value: ${value}`);
+          process.exit(1);
+        }
         break;
       }
       case "--no-telemetry":
@@ -93,7 +105,15 @@ function parseArgs(argv: string[]): Options {
     process.exit(1);
   }
 
-  return { file, action, iterations, threads, noTelemetry };
+  return { file, action, iterations, threads, layout, noTelemetry };
+}
+
+function buildDecodeOptions(options: Options) {
+  const decodeOptions = {
+    ...(options.threads !== undefined ? { threads: options.threads } : {}),
+    ...(options.layout !== "interleaved" ? { layout: options.layout } : {}),
+  };
+  return Object.keys(decodeOptions).length > 0 ? decodeOptions : undefined;
 }
 
 function percentile(sorted: number[], p: number): number {
@@ -113,8 +133,7 @@ function percentile(sorted: number[], p: number): number {
 function main(): void {
   const options = parseArgs(process.argv.slice(2));
   const bytes = readFileSync(options.file);
-  const decodeOptions =
-    options.threads === undefined ? undefined : { threads: options.threads };
+  const decodeOptions = buildDecodeOptions(options);
 
   const warmup = decode(bytes, decodeOptions);
   for (let i = 1; i < WARMUP_DECODES; i++) {

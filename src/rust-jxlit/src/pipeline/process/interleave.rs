@@ -45,47 +45,62 @@ pub(crate) fn run_interleave(
             let (orig_x, orig_y) = to_original_coord(orientation, width, height, x, y);
             for c in 0..channels {
                 let idx = c + (x as usize + y as usize * width_us) * channels;
-                let (start_x, start_y) = start_offset_xy[c];
-                let (Some(px), Some(py)) = (
-                    orig_x.checked_add_signed(start_x),
-                    orig_y.checked_add_signed(start_y),
-                ) else {
-                    pixels[idx] = 0.0;
-                    count += 1;
-                    continue;
-                };
-                let grid = grids[c];
-                let bd = bit_depth[c];
-
-                if c >= 3 || spot_colors.is_empty() {
-                    pixels[idx] = sample_from_grid(grid, px as usize, py as usize, bd);
-                } else {
-                    let mut sample = sample_from_grid(grid, px as usize, py as usize, bd);
-                    for spot in spot_colors {
-                        let color = [spot.rgb.0, spot.rgb.1, spot.rgb.2][c];
-                        let mix = match (
-                            orig_x.checked_add_signed(spot.start_offset_xy.0),
-                            orig_y.checked_add_signed(spot.start_offset_xy.1),
-                        ) {
-                            (Some(sx), Some(sy)) => {
-                                sample_from_grid(
-                                    spot.grid,
-                                    sx as usize,
-                                    sy as usize,
-                                    spot.bit_depth,
-                                ) * spot.solidity
-                            }
-                            _ => 0.0,
-                        };
-                        sample = color * mix + sample * (1.0 - mix);
-                    }
-                    pixels[idx] = sample;
-                }
+                pixels[idx] = sample_at(
+                    grids,
+                    bit_depth,
+                    start_offset_xy,
+                    spot_colors,
+                    c,
+                    orig_x,
+                    orig_y,
+                );
                 count += 1;
             }
         }
     }
     count
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn sample_at(
+    grids: &[&ImageBuffer],
+    bit_depth: &[BitDepth],
+    start_offset_xy: &[(i32, i32)],
+    spot_colors: &[SpotColor],
+    c: usize,
+    orig_x: u32,
+    orig_y: u32,
+) -> f32 {
+    let (start_x, start_y) = start_offset_xy[c];
+    let (Some(px), Some(py)) = (
+        orig_x.checked_add_signed(start_x),
+        orig_y.checked_add_signed(start_y),
+    ) else {
+        return 0.0;
+    };
+    let grid = grids[c];
+    let bd = bit_depth[c];
+
+    if c >= 3 || spot_colors.is_empty() {
+        return sample_from_grid(grid, px as usize, py as usize, bd);
+    }
+
+    let mut sample = sample_from_grid(grid, px as usize, py as usize, bd);
+    for spot in spot_colors {
+        let color = [spot.rgb.0, spot.rgb.1, spot.rgb.2][c];
+        let mix = match (
+            orig_x.checked_add_signed(spot.start_offset_xy.0),
+            orig_y.checked_add_signed(spot.start_offset_xy.1),
+        ) {
+            (Some(sx), Some(sy)) => {
+                sample_from_grid(spot.grid, sx as usize, sy as usize, spot.bit_depth)
+                    * spot.solidity
+            }
+            _ => 0.0,
+        };
+        sample = color * mix + sample * (1.0 - mix);
+    }
+    sample
 }
 
 #[inline]
@@ -102,7 +117,13 @@ fn sample_from_grid(grid: &ImageBuffer, x: usize, y: usize, bit_depth: BitDepth)
 }
 
 #[inline]
-fn to_original_coord(orientation: u32, width: u32, height: u32, x: u32, y: u32) -> (u32, u32) {
+pub(crate) fn to_original_coord(
+    orientation: u32,
+    width: u32,
+    height: u32,
+    x: u32,
+    y: u32,
+) -> (u32, u32) {
     match orientation {
         1 => (x, y),
         2 => (width - x - 1, y),

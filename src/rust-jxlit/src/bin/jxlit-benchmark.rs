@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::process;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use jxlit::{DecodeOptions, RebasingTelemetry, decode_with_options, rebase_telemetry};
+use jxlit::{DecodeOptions, PixelLayout, RebasingTelemetry, decode_with_options, rebase_telemetry};
 
 const WARMUP_DECODES: usize = 3;
 const DEFAULT_ITERATIONS: usize = 100;
@@ -15,6 +15,7 @@ struct Options {
     action: String,
     iterations: usize,
     threads: Option<usize>,
+    layout: PixelLayout,
     no_telemetry: bool,
 }
 
@@ -31,6 +32,7 @@ fn parse_args() -> Options {
     let mut action: Option<String> = None;
     let mut iterations = DEFAULT_ITERATIONS;
     let mut threads: Option<usize> = None;
+    let mut layout = PixelLayout::Interleaved;
     let mut no_telemetry = false;
     let mut args = env::args().skip(1);
 
@@ -68,6 +70,22 @@ fn parse_args() -> Options {
                     process::exit(1);
                 }));
             }
+            "--layout" => {
+                let value = args.next().unwrap_or_else(|| {
+                    eprintln!("missing value for --layout");
+                    process::exit(1);
+                });
+                layout = match value.as_str() {
+                    "interleaved" => PixelLayout::Interleaved,
+                    "planar" => PixelLayout::Planar,
+                    _ => {
+                        eprintln!(
+                            "invalid --layout value: {value} (expected interleaved or planar)"
+                        );
+                        process::exit(1);
+                    }
+                };
+            }
             "--no-telemetry" => no_telemetry = true,
             other => {
                 eprintln!("unknown argument: {other}");
@@ -94,6 +112,7 @@ fn parse_args() -> Options {
         action,
         iterations,
         threads,
+        layout,
         no_telemetry,
     }
 }
@@ -195,6 +214,7 @@ fn main() {
 
     let decode_options = DecodeOptions {
         threads: options.threads,
+        layout: options.layout,
         ..DecodeOptions::default()
     };
 
@@ -242,6 +262,7 @@ fn main() {
     } else {
         let telemetry_options = DecodeOptions {
             threads: options.threads,
+            layout: options.layout,
             telemetry: true,
         };
         let timebase = unix_time_ms();

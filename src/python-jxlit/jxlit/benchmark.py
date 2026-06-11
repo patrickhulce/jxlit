@@ -9,12 +9,14 @@ import sys
 import time
 from pathlib import Path
 
-from jxlit import DecodeOptions, decode
+from jxlit import DecodeOptions, PixelLayout, decode
 from jxlit._core import print_phase_summary, telemetry_to_dict
 
 WARMUP_DECODES = 3
 DEFAULT_ITERATIONS = 100
-DEFAULT_FILE = Path(__file__).resolve().parents[3] / "assets" / "frame_4K_10bit_e1_d0p5_fd4.jxl"
+DEFAULT_FILE = (
+    Path(__file__).resolve().parents[3] / "assets" / "frame_4K_10bit_e1_d0p5_fd4.jxl"
+)
 
 
 def percentile(values: list[float], p: float) -> float:
@@ -58,6 +60,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Disable post-loop phase telemetry collection",
     )
+    parser.add_argument(
+        "--layout",
+        choices=("interleaved", "planar"),
+        default="interleaved",
+        help="Pixel buffer layout (default: interleaved)",
+    )
     return parser.parse_args()
 
 
@@ -72,7 +80,8 @@ def main() -> None:
         print("--iterations must be greater than 0", file=sys.stderr)
         raise SystemExit(1)
 
-    decode_options = DecodeOptions(threads=args.threads)
+    layout = PixelLayout.PLANAR if args.layout == "planar" else PixelLayout.INTERLEAVED
+    decode_options = DecodeOptions(threads=args.threads, layout=layout)
     data = Path(args.file).read_bytes()
 
     warmup = decode(data, options=decode_options)

@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use crate::{DecodeOptions, decode, decode_with_options};
+use crate::{DecodeOptions, PixelLayout, decode, decode_with_options};
 
 fn assets_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -76,11 +76,37 @@ fn decode_metadata_includes_version() {
     let jxl_bytes = fs::read(&jxl_path).expect("read jxl fixture");
 
     let decoded = decode(&jxl_bytes).expect("decode jxl fixture");
-    assert_eq!(
-        decoded.metadata.jxlit.version,
-        env!("CARGO_PKG_VERSION")
-    );
+    assert_eq!(decoded.metadata.jxlit.version, env!("CARGO_PKG_VERSION"));
     assert!(decoded.metadata.jxlit.telemetry.is_none());
+}
+
+#[test]
+fn decode_planar_colors_fixture_uses_memcpy_export() {
+    let assets = assets_dir();
+    let jxl_path = assets.join("colors_e1_d0p5_fd4.jxl");
+    let jxl_bytes = fs::read(&jxl_path).expect("read jxl fixture");
+
+    let decoded = decode_with_options(
+        &jxl_bytes,
+        &DecodeOptions {
+            layout: PixelLayout::Planar,
+            telemetry: true,
+            ..DecodeOptions::default()
+        },
+    )
+    .expect("decode jxl fixture");
+
+    let telemetry = decoded
+        .metadata
+        .jxlit
+        .telemetry
+        .as_ref()
+        .expect("telemetry enabled");
+    let names: Vec<_> = telemetry.measures.iter().map(|m| m.name).collect();
+    assert!(
+        names.contains(&"export_planar_memcpy"),
+        "expected export_planar_memcpy in telemetry, got {names:?}"
+    );
 }
 
 #[test]
