@@ -245,6 +245,7 @@ pub fn decode(input: &[u8], options: Option<DecodeOptions>) -> Result<DecodedIma
             threads: opts.threads,
             telemetry: opts.telemetry,
             layout: opts.layout,
+            ..jxlit::DecodeOptions::default()
         },
         None => jxlit::DecodeOptions::default(),
     };

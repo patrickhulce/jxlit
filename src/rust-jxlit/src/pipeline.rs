@@ -19,6 +19,7 @@
 //! output is bit-identical to the upstream renderer.
 
 pub mod decode;
+pub mod gpu;
 pub mod parse;
 pub mod process;
 pub mod render;

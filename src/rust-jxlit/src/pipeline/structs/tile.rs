@@ -6,9 +6,9 @@
 //! "tile"; `group_index` is the JXL group index and `low_frequency_group_index`
 //! is the JXL LF-group index that contains it.
 
-use jxl_grid::MutableSubgrid;
 use jxl_modular::Sample;
 
+use crate::pipeline::gpu::DeviceCoefficients;
 use crate::vendor::jxl_frame::data::LfGroup;
 use crate::vendor::jxl_render::Region;
 
@@ -34,7 +34,7 @@ pub struct TileDeclaration {
 pub struct TileCtx<'a, S: Sample> {
     pub declaration: TileDeclaration,
     /// XYB coefficient sub-grids (X, Y, B) into the frame color buffer.
-    pub xyb_coefficients: [MutableSubgrid<'a, f32>; 3],
+    pub xyb_coefficients: DeviceCoefficients<'a>,
     /// The decoded LF group covering this tile.
     pub low_frequency_group: &'a LfGroup<S>,
 }

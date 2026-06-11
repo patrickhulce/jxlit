@@ -5,9 +5,10 @@ use std::collections::HashMap;
 
 use jxl_modular::Sample;
 
+use crate::pipeline::gpu::{DeviceCoefficients, DeviceColorGroups, DeviceImage};
 use crate::vendor::jxl_frame::FrameHeader;
 use crate::vendor::jxl_frame::data::LfGroup;
-use crate::vendor::jxl_render::{ImageWithRegion, Region};
+use crate::vendor::jxl_render::Region;
 
 use crate::pipeline::structs::tile::{TileCtx, TileDeclaration};
 
@@ -46,25 +47,41 @@ pub fn build_tiles(frame_header: &FrameHeader) -> Vec<TileDeclaration> {
 /// (matching the upstream renderer).
 pub fn build_tile_contexts<'a, S: Sample>(
     tiles: &[TileDeclaration],
-    color_buffer: &'a mut ImageWithRegion,
+    color_buffer: &'a mut DeviceImage,
     frame_header: &FrameHeader,
     low_frequency_groups: &'a HashMap<u32, LfGroup<S>>,
 ) -> Vec<TileCtx<'a, S>> {
     let by_group: HashMap<u32, TileDeclaration> =
         tiles.iter().map(|tile| (tile.group_index, *tile)).collect();
 
-    color_buffer
-        .color_groups_with_group_id(frame_header)
-        .into_iter()
-        .filter_map(|(group_index, xyb_coefficients)| {
-            let declaration = by_group.get(&group_index).copied()?;
-            let low_frequency_group =
-                low_frequency_groups.get(&declaration.low_frequency_group_index)?;
-            Some(TileCtx {
-                declaration,
-                xyb_coefficients,
-                low_frequency_group,
+    let color_groups = color_buffer.color_groups_with_group_id(frame_header);
+
+    match color_groups {
+        DeviceColorGroups::Cpu(groups) => groups
+            .into_iter()
+            .filter_map(|(group_index, xyb_coefficients)| {
+                let declaration = by_group.get(&group_index).copied()?;
+                let low_frequency_group =
+                    low_frequency_groups.get(&declaration.low_frequency_group_index)?;
+                Some(TileCtx {
+                    declaration,
+                    xyb_coefficients: DeviceCoefficients::Cpu(xyb_coefficients),
+                    low_frequency_group,
+                })
             })
-        })
-        .collect()
+            .collect(),
+        DeviceColorGroups::Gpu(groups) => groups
+            .into_iter()
+            .filter_map(|(group_index, xyb_coefficients)| {
+                let declaration = by_group.get(&group_index).copied()?;
+                let low_frequency_group =
+                    low_frequency_groups.get(&declaration.low_frequency_group_index)?;
+                Some(TileCtx {
+                    declaration,
+                    xyb_coefficients: DeviceCoefficients::Gpu(xyb_coefficients),
+                    low_frequency_group,
+                })
+            })
+            .collect(),
+    }
 }

@@ -5,8 +5,8 @@ mod vendor;
 
 pub use telemetry::{RebasedMeasure, RebasingTelemetry, rebase_telemetry};
 pub use types::{
-    DecodeError, DecodeMetadata, DecodeOptions, DecodeTelemetry, DecodedImage, JxlitMeta, Measure,
-    PixelLayout,
+    DecodeError, DecodeMetadata, DecodeOptions, DecodeTelemetry, DecodedImage, Hardware, JxlitMeta,
+    Measure, PixelLayout,
 };
 
 pub fn decode(input: &[u8]) -> Result<DecodedImage, DecodeError> {

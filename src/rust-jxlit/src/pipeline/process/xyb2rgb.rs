@@ -12,23 +12,38 @@ use std::sync::Arc;
 use jxl_image::ImageHeader;
 use jxl_threadpool::JxlThreadPool;
 
-use crate::vendor::jxl_render::{ImageWithRegion, IndexedFrame, RenderContext, Result, util};
+use crate::pipeline::gpu::{DeviceImage, from_cpu_arc, into_cpu_arc, kernels};
+use crate::vendor::jxl_render::{IndexedFrame, RenderContext, Result, util};
 
 /// Runs the final keyframe color transform (XYB -> requested encoding).
 pub fn run_xyb2rgb(
     ctx: &RenderContext,
     frame: &IndexedFrame,
-    grid: Arc<ImageWithRegion>,
-) -> Result<Arc<ImageWithRegion>> {
-    ctx.postprocess_keyframe(frame, grid)
+    grid: Arc<DeviceImage>,
+) -> Result<Arc<DeviceImage>> {
+    match grid.as_ref() {
+        DeviceImage::Cpu(_) => {
+            let cpu = into_cpu_arc(grid)?;
+            let out = ctx.postprocess_keyframe(frame, cpu)?;
+            Ok(from_cpu_arc(out))
+        }
+        DeviceImage::Gpu(_) => kernels::run_xyb2rgb_on_gpu(ctx, frame, grid),
+    }
 }
 
 /// Converts a non-final frame's color buffer "for record" prior to blending.
 pub fn run_color_for_record(
     image_header: &ImageHeader,
     do_ycbcr: bool,
-    fb: &mut ImageWithRegion,
+    fb: &mut DeviceImage,
     pool: &JxlThreadPool,
 ) -> Result<()> {
-    util::convert_color_for_record(image_header, do_ycbcr, fb, pool)
+    match fb {
+        DeviceImage::Cpu(image) => {
+            util::convert_color_for_record(image_header, do_ycbcr, image, pool)
+        }
+        DeviceImage::Gpu(_) => {
+            kernels::run_color_for_record_on_gpu(image_header, do_ycbcr, fb, pool)
+        }
+    }
 }

@@ -59,6 +59,7 @@ fn decode_options_from_napi(options: Option<DecodeOptions>) -> napi::Result<jxli
             threads: opts.threads.map(|n| n as usize),
             telemetry: opts.telemetry.unwrap_or(false),
             layout: layout_from_napi(opts.layout)?,
+            ..jxlit::DecodeOptions::default()
         }),
         None => Ok(jxlit::DecodeOptions::default()),
     }

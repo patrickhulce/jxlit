@@ -264,6 +264,7 @@ fn main() {
             threads: options.threads,
             layout: options.layout,
             telemetry: true,
+            ..DecodeOptions::default()
         };
         let timebase = unix_time_ms();
         let wall_start = Instant::now();

@@ -5,9 +5,10 @@ use std::collections::HashMap;
 use jxl_image::ImageHeader;
 use jxl_modular::Sample;
 
+use crate::pipeline::gpu::{Device, DeviceImage};
 use crate::vendor::jxl_frame::FrameHeader;
 use crate::vendor::jxl_frame::data::{HfGlobal, LfGlobal, LfGlobalVarDct, LfGroup};
-use crate::vendor::jxl_render::{ImageWithRegion, Region};
+use crate::vendor::jxl_render::Region;
 
 use super::tile::TileDeclaration;
 
@@ -30,13 +31,15 @@ pub struct FrameDeclaration<'a> {
 /// image. The HF coefficient color buffer is not held here; it is the mutable
 /// target carved per-tile into [`super::tile::TileCtx`].
 pub struct FrameCtx<'a, S: Sample> {
+    #[allow(dead_code)]
+    pub device: Device,
     pub frame_header: &'a FrameHeader,
     pub image_header: &'a ImageHeader,
     pub low_frequency_global: &'a LfGlobal<S>,
     pub low_frequency_global_vardct: &'a LfGlobalVarDct,
     pub high_frequency_global: Option<&'a HfGlobal>,
     pub low_frequency_groups: &'a HashMap<u32, LfGroup<S>>,
-    pub low_frequency_image: ImageWithRegion,
+    pub low_frequency_image: DeviceImage,
     pub aligned_region: Region,
     pub group_dim: u32,
     pub subsampled: bool,

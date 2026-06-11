@@ -14,6 +14,9 @@ use jxl_image::{BitDepth, ExtraChannelType};
 use jxl_modular::{ChannelShift, Sample, image::TransformedModularSubimage};
 use jxl_threadpool::JxlThreadPool;
 
+use crate::pipeline::gpu::{
+    Device, DeviceImage, GpuImageWithRegion, from_cpu, from_cpu_arc, into_cpu_arc, kernels,
+};
 use crate::vendor::jxl_frame::FrameHeader;
 use crate::vendor::jxl_frame::data::{LfGlobal, LfGlobalVarDct, LfGroup};
 use crate::vendor::jxl_frame::header::Encoding;
@@ -35,7 +38,7 @@ use crate::{DecodeError, DecodedImage};
 /// Held here (rather than in `structs/`) since it is the direct output of the
 /// render stage; `process::interleave` consumes it.
 pub struct RenderedFrame {
-    pub image: Arc<ImageWithRegion>,
+    pub image: Arc<DeviceImage>,
     pub target_frame_region: Region,
     pub orientation: u32,
     pub color_bit_depth: BitDepth,
@@ -59,7 +62,8 @@ pub fn render_frame(
         .keyframe_frame_index(keyframe_index)
         .ok_or_else(|| DecodeError::new("keyframe not loaded"))?;
 
-    let image = render_keyframe_image(ctx, idx).map_err(|e| DecodeError::new(e.to_string()))?;
+    let image =
+        render_keyframe_image(ctx, idx, options).map_err(|e| DecodeError::new(e.to_string()))?;
 
     let frame = &ctx.frames()[idx];
     let frame_header = frame.header();
@@ -90,9 +94,20 @@ pub fn render_frame(
 /// Fuses spot-color extra channels into RGB grids in place when possible.
 fn fuse_spot_colors(
     rendered: &RenderedFrame,
-) -> std::result::Result<(Arc<ImageWithRegion>, bool), DecodeError> {
-    if !rendered.render_spot_color {
-        return Ok((Arc::clone(&rendered.image), false));
+) -> std::result::Result<(Arc<DeviceImage>, bool), DecodeError> {
+    match rendered.image.as_ref() {
+        DeviceImage::Cpu(_) if rendered.render_spot_color => {
+            // fall through to CPU path below
+        }
+        DeviceImage::Gpu(_) => {
+            return kernels::fuse_spot_colors_on_gpu(
+                Arc::clone(&rendered.image),
+                rendered.color_bit_depth,
+                &rendered.extra_channels,
+            )
+            .map_err(|e| DecodeError::new(e.to_string()));
+        }
+        _ => return Ok((Arc::clone(&rendered.image), false)),
     }
 
     let color_channels = rendered.image.color_channels();
@@ -108,13 +123,17 @@ fn fuse_spot_colors(
         return Ok((Arc::clone(&rendered.image), false));
     }
 
-    let mut image = Arc::try_unwrap(Arc::clone(&rendered.image)).unwrap_or_else(|arc| {
+    let mut device_image = Arc::try_unwrap(Arc::clone(&rendered.image)).unwrap_or_else(|arc| {
         arc.try_clone()
             .map_err(|e| DecodeError::new(e.to_string()))
             .expect("clone rendered image for spot fusion")
     });
 
-    image
+    let DeviceImage::Cpu(ref mut cpu_image) = device_image else {
+        unreachable!();
+    };
+
+    cpu_image
         .convert_modular_color(rendered.color_bit_depth)
         .map_err(|e| DecodeError::new(e.to_string()))?;
 
@@ -125,13 +144,13 @@ fn fuse_spot_colors(
         let spot_buf_idx = color_channels + ec_idx;
 
         {
-            let spot_buf = &mut image.buffer_mut()[spot_buf_idx];
+            let spot_buf = &mut cpu_image.buffer_mut()[spot_buf_idx];
             spot_buf
                 .convert_to_float_modular(*ec_bit_depth)
                 .map_err(|e| DecodeError::new(e.to_string()))?;
         }
 
-        let (prefix, suffix) = image.buffer_mut().split_at_mut(spot_buf_idx);
+        let (prefix, suffix) = cpu_image.buffer_mut().split_at_mut(spot_buf_idx);
         let (color_bufs, _) = prefix.split_at_mut(color_channels);
         let spot_buf = &suffix[0];
 
@@ -150,7 +169,7 @@ fn fuse_spot_colors(
             .map_err(|e| DecodeError::new(e.to_string()))?;
     }
 
-    Ok((Arc::new(image), true))
+    Ok((Arc::new(device_image), true))
 }
 
 /// Computes the output layout, selects the color/black/alpha/spot channels,
@@ -175,9 +194,55 @@ fn build_decoded_image(
     }
 
     let (image, spots_fused) = fuse_spot_colors(rendered)?;
-    let fb = image.buffer();
-    let color_channels = image.color_channels();
-    let regions_and_shifts = image.regions_and_shifts();
+
+    if image.as_ref().device().is_gpu() {
+        let channels = image.color_channels();
+        let width_us = width as usize;
+        let height_us = height as usize;
+        let plane_size = width_us * height_us;
+        let mut pixels = vec![0.0f32; plane_size * channels];
+        let count = match options.layout {
+            PixelLayout::Interleaved => kernels::run_interleave_on_gpu(
+                &mut pixels,
+                image.as_ref(),
+                &[],
+                &[],
+                orientation,
+                width,
+                height,
+                channels,
+            ),
+            PixelLayout::Planar => kernels::run_export_planar_on_gpu(
+                &mut pixels,
+                image.as_ref(),
+                &[],
+                &[],
+                orientation,
+                width,
+                height,
+                channels,
+                plane_size,
+            ),
+        };
+        if count != pixels.len() {
+            return Err(DecodeError::new(format!(
+                "expected to write {} samples, wrote {count}",
+                pixels.len()
+            )));
+        }
+        return Ok(DecodedImage {
+            height: height_us,
+            width: width_us,
+            channels,
+            pixels,
+            metadata: DecodeMetadata::with_version(env!("CARGO_PKG_VERSION")),
+        });
+    }
+
+    let cpu_image = into_cpu_arc(image).map_err(|e| DecodeError::new(e.to_string()))?;
+    let fb = cpu_image.buffer();
+    let color_channels = cpu_image.color_channels();
+    let regions_and_shifts = cpu_image.regions_and_shifts();
 
     let mut grids: Vec<&ImageBuffer> = fb[..color_channels].iter().collect();
     let mut bit_depth = vec![rendered.color_bit_depth; grids.len()];
@@ -188,7 +253,6 @@ fn build_decoded_image(
         grid_shifts.push(*shift);
     }
 
-    // Black channel (CMYK only).
     if rendered.is_cmyk {
         for (ec_idx, (ec, (region, shift))) in rendered
             .extra_channels
@@ -206,7 +270,6 @@ fn build_decoded_image(
         }
     }
 
-    // Alpha channel (the `stream()` variant includes alpha).
     for (ec_idx, (ec, (region, shift))) in rendered
         .extra_channels
         .iter()
@@ -222,7 +285,6 @@ fn build_decoded_image(
         }
     }
 
-    // Spot colors (only mixed into RGB color channels when not fused earlier).
     let mut spot_colors = Vec::new();
     if !spots_fused && rendered.render_spot_color && color_channels == 3 {
         for (ec_idx, (ec, (region, _))) in rendered
@@ -313,7 +375,11 @@ fn build_decoded_image(
 /// Decodes the keyframe to a blended, color-transformed planar image. Forks
 /// `render_by_index` + `postprocess_keyframe`: decode the color buffer, inject
 /// it into the vendored blend machinery, then run the color transform.
-fn render_keyframe_image(ctx: &RenderContext, idx: usize) -> Result<Arc<ImageWithRegion>> {
+fn render_keyframe_image(
+    ctx: &RenderContext,
+    idx: usize,
+    options: &DecodeOptions,
+) -> Result<Arc<DeviceImage>> {
     let _render_keyframe = crate::phase_guard!("render_keyframe");
     let frame = &ctx.frames()[idx];
     let image_region = ctx.requested_image_region();
@@ -330,6 +396,7 @@ fn render_keyframe_image(ctx: &RenderContext, idx: usize) -> Result<Arc<ImageWit
             image_region,
             pool,
             frame_visibility,
+            options,
         )?
     } else {
         let refs = ctx.reference_frames_wide(idx);
@@ -341,6 +408,7 @@ fn render_keyframe_image(ctx: &RenderContext, idx: usize) -> Result<Arc<ImageWit
             image_region,
             pool,
             frame_visibility,
+            options,
         )?
     };
 
@@ -362,10 +430,12 @@ fn decode_color_buffer<S: Sample>(
     image_region: Region,
     pool: &JxlThreadPool,
     frame_visibility: (usize, usize),
-) -> Result<ImageWithRegion> {
+    options: &DecodeOptions,
+) -> Result<DeviceImage> {
     let _decode_color_buffer = crate::phase_guard!("decode_color_buffer");
     let image_header = frame.image_header();
     let frame_header = frame.header();
+    let device = Device::select(options, frame_header);
 
     let regions = render::region::render_region(frame, image_region);
     let color_padded_region = regions.color_padded_region;
@@ -377,6 +447,7 @@ fn decode_color_buffer<S: Sample>(
         }
         Encoding::VarDct => {
             let result = render::flows::vardct::run_vardct_flow(
+                device,
                 frame,
                 reference_frames.lf.as_ref(),
                 cache,
@@ -390,7 +461,7 @@ fn decode_color_buffer<S: Sample>(
                     let render = render.blend(None, pool)?;
                     let mut render = render.upsample_lf(1)?;
                     render.fill_opaque_alpha(&image_header.metadata.ec_info);
-                    render
+                    from_cpu(render)
                 }
                 (Err(e), _) => return Err(e),
             }
@@ -451,7 +522,7 @@ fn decode_color_buffer<S: Sample>(
 
 /// Allocates the (empty) XYB high-frequency coefficient buffer that pass-group
 /// decode writes into, shaped to the modular region and channel shifts.
-pub fn build_coefficient_buffer(
+pub fn build_coefficient_buffer_cpu(
     frame_header: &FrameHeader,
     modular_region: Region,
     tracker: Option<&AllocTracker>,
@@ -477,6 +548,7 @@ pub fn build_coefficient_buffer(
 /// from a referenced LF frame.
 #[allow(clippy::too_many_arguments)]
 pub fn build_low_frequency_image<S: Sample>(
+    device: Device,
     frame: &IndexedFrame,
     low_frequency_global: &LfGlobal<S>,
     low_frequency_groups: &mut HashMap<u32, LfGroup<S>>,
@@ -486,7 +558,7 @@ pub fn build_low_frequency_image<S: Sample>(
     low_frequency_global_vardct: &LfGlobalVarDct,
     subsampled: bool,
     pool: &JxlThreadPool,
-) -> Result<ImageWithRegion> {
+) -> Result<DeviceImage> {
     let low_frequency_image = parse::frames::read_low_frequency_groups(
         frame,
         low_frequency_global,
@@ -498,10 +570,10 @@ pub fn build_low_frequency_image<S: Sample>(
 
     if let Some(lf) = lf_frame {
         let lf_frame = Arc::clone(&lf.image).run_with_image()?;
-        Ok(lf_frame.blend(None, pool)?.try_clone()?)
+        Ok(from_cpu(lf_frame.blend(None, pool)?.try_clone()?))
     } else {
         let mut low_frequency_image = low_frequency_image.unwrap();
-        decode::dequant::run_low_frequency_dequant(
+        decode::dequant::run_low_frequency_dequant_cpu(
             &mut low_frequency_image,
             &low_frequency_global.lf_dequant,
             &low_frequency_global_vardct.quantizer,
@@ -509,15 +581,22 @@ pub fn build_low_frequency_image<S: Sample>(
             subsampled,
             frame.header().flags.skip_adaptive_lf_smoothing(),
         )?;
-        Ok(low_frequency_image)
+        Ok(match device {
+            Device::Cpu => from_cpu(low_frequency_image),
+            Device::Gpu => DeviceImage::Gpu(GpuImageWithRegion::from_cpu_placeholder(
+                &low_frequency_image,
+            )),
+        })
     }
 }
 
 /// Blends the decoded frame onto the canvas via the vendored staged blender.
-pub fn run_blend(
-    ctx: &RenderContext,
-    idx: usize,
-    grid: ImageWithRegion,
-) -> Result<Arc<ImageWithRegion>> {
-    ctx.blend_staged(idx, grid)
+pub fn run_blend(ctx: &RenderContext, idx: usize, grid: DeviceImage) -> Result<Arc<DeviceImage>> {
+    match grid {
+        DeviceImage::Cpu(image) => {
+            let blended = ctx.blend_staged(idx, image)?;
+            Ok(from_cpu_arc(blended))
+        }
+        DeviceImage::Gpu(_) => kernels::run_blend_on_gpu(ctx, idx, grid),
+    }
 }

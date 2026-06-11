@@ -8,6 +8,7 @@
 use jxl_modular::Sample;
 
 use crate::pipeline::decode::{dequant, idct};
+use crate::pipeline::gpu::DeviceCoefficients;
 use crate::pipeline::structs::frame::FrameCtx;
 use crate::pipeline::structs::tile::TileCtx;
 
@@ -56,8 +57,15 @@ pub fn render_tile<S: Sample>(frame_ctx: &FrameCtx<'_, S>, mut tile: TileCtx<'_,
         let lf_chan_corr = &frame_ctx.low_frequency_global_vardct.lf_chan_corr;
         let cfl_base_x = ((group_x % 8) * frame_ctx.group_dim / 64) as usize;
         let cfl_base_y = ((group_y % 8) * frame_ctx.group_dim / 64) as usize;
-        let gw = xyb_coefficients[0].width().div_ceil(64);
-        let gh = xyb_coefficients[0].height().div_ceil(64);
+
+        let (gw, gh) = match xyb_coefficients {
+            DeviceCoefficients::Cpu(coeffs) => (
+                coeffs[0].width().div_ceil(64),
+                coeffs[0].height().div_ceil(64),
+            ),
+            DeviceCoefficients::Gpu(_) => (0, 0),
+        };
+
         let x_from_y = hf_meta
             .x_from_y
             .as_subgrid()

@@ -13,21 +13,21 @@ use std::sync::RwLock;
 use jxl_modular::Sample;
 use jxl_threadpool::JxlThreadPool;
 
+use crate::pipeline::gpu::{Device, DeviceCoefficients, DeviceImage, build_coefficient_buffer};
 use crate::vendor::jxl_frame::data::{PassGroupParams, PassGroupParamsVardct};
-use crate::vendor::jxl_render::{
-    Error, ImageWithRegion, IndexedFrame, Reference, Region, RenderCache, Result,
-};
+use crate::vendor::jxl_render::{Error, IndexedFrame, Reference, Region, RenderCache, Result};
 
 use crate::pipeline::structs::frame::{FrameCtx, FrameDeclaration};
 use crate::pipeline::{decode, parse, render};
 
 pub fn run_vardct_flow<S: Sample>(
+    device: Device,
     frame: &IndexedFrame,
     lf_frame: Option<&Reference<S>>,
     cache: &mut RenderCache<S>,
     region: Region,
     pool: &JxlThreadPool,
-) -> Result<ImageWithRegion> {
+) -> Result<DeviceImage> {
     let _vardct_flow = crate::phase_guard!("vardct_flow");
     let image_header = frame.image_header();
     let frame_header = frame.header();
@@ -78,9 +78,6 @@ pub fn run_vardct_flow<S: Sample>(
     );
     let modular_lf_region = regions.modular_lf_region;
 
-    // Cheap, immutable description of the frame: geometry, the VarDCT regions and
-    // the per-tile (pass-group) declarations. Consumed below to build the tile
-    // contexts and the per-tile `FrameCtx`.
     let frame_declaration = FrameDeclaration {
         frame_header,
         image_header,
@@ -108,7 +105,6 @@ pub fn run_vardct_flow<S: Sample>(
     let high_frequency_global_slot = &mut cache.hf_global;
     let low_frequency_groups_mut = &mut cache.lf_groups;
 
-    // Read HfGlobal concurrently with LF-group decode + LF image preparation.
     let result = RwLock::new(Result::Ok(()));
     let low_frequency_image = pool.scope(|scope| -> Result<_> {
         if high_frequency_global_slot.is_none() {
@@ -127,6 +123,7 @@ pub fn run_vardct_flow<S: Sample>(
         let low_frequency_image = {
             let _build_lf_image = crate::phase_guard!("build_lf_image");
             render::frame::build_low_frequency_image(
+                device,
                 frame,
                 low_frequency_global,
                 low_frequency_groups_mut,
@@ -145,7 +142,8 @@ pub fn run_vardct_flow<S: Sample>(
 
     let mut color_buffer = {
         let _build_coefficient_buffer = crate::phase_guard!("build_coefficient_buffer");
-        render::frame::build_coefficient_buffer(
+        build_coefficient_buffer(
+            device,
             frame_header,
             frame_declaration.modular_region,
             tracker,
@@ -162,7 +160,6 @@ pub fn run_vardct_flow<S: Sample>(
         low_frequency_groups,
     );
 
-    // Per-tile ANS decode (inline pass-group loop).
     (|| -> Result<()> {
         let _tile_entropy = crate::phase_guard!("tile_entropy");
         let Some(high_frequency_global) = high_frequency_global else {
@@ -185,11 +182,6 @@ pub fn run_vardct_flow<S: Sample>(
                         continue;
                     }
 
-                    let mut xyb_coefficients = {
-                        let [x, y, b] = &mut tile.xyb_coefficients;
-                        [x, y, b].map(|grid| grid.borrow_mut().into_i32())
-                    };
-
                     let bitstream = match frame.pass_group_bitstream(pass_idx, group_idx) {
                         Some(Ok(bitstream)) => bitstream,
                         Some(Err(e)) => {
@@ -206,32 +198,66 @@ pub fn run_vardct_flow<S: Sample>(
                         .map(|(_, modular)| modular);
 
                     let result = &result;
-                    scope.spawn(move |_| {
-                        let vardct = Some(PassGroupParamsVardct {
-                            lf_vardct: low_frequency_global_vardct,
-                            hf_global: high_frequency_global,
-                            hf_coeff_output: &mut xyb_coefficients,
-                        });
+                    match &mut tile.xyb_coefficients {
+                        DeviceCoefficients::Cpu([x, y, b]) => {
+                            let mut xyb_coefficients =
+                                [x, y, b].map(|grid| grid.borrow_mut().into_i32());
+                            scope.spawn(move |_| {
+                                let vardct = Some(PassGroupParamsVardct {
+                                    lf_vardct: low_frequency_global_vardct,
+                                    hf_global: high_frequency_global,
+                                    hf_coeff_output: &mut xyb_coefficients,
+                                });
 
-                        let r = decode::entropy::read_pass_group(
-                            &mut bitstream,
-                            PassGroupParams {
-                                frame_header,
-                                lf_group,
-                                pass_idx,
-                                group_idx,
-                                global_ma_config,
-                                modular,
-                                vardct,
-                                allow_partial,
-                                tracker,
-                                pool,
-                            },
-                        );
-                        if !allow_partial && r.is_err() {
-                            *result.write().unwrap() = r.map_err(From::from);
+                                let r = decode::entropy::read_pass_group(
+                                    Device::Cpu,
+                                    &mut bitstream,
+                                    PassGroupParams {
+                                        frame_header,
+                                        lf_group,
+                                        pass_idx,
+                                        group_idx,
+                                        global_ma_config,
+                                        modular,
+                                        vardct,
+                                        allow_partial,
+                                        tracker,
+                                        pool,
+                                    },
+                                    group_idx,
+                                    pass_idx,
+                                );
+                                if !allow_partial && r.is_err() {
+                                    *result.write().unwrap() = r.map_err(From::from);
+                                }
+                            });
                         }
-                    });
+                        DeviceCoefficients::Gpu(_) => {
+                            scope.spawn(move |_| {
+                                let r = decode::entropy::read_pass_group(
+                                    Device::Gpu,
+                                    &mut bitstream,
+                                    PassGroupParams {
+                                        frame_header,
+                                        lf_group,
+                                        pass_idx,
+                                        group_idx,
+                                        global_ma_config,
+                                        modular,
+                                        vardct: None,
+                                        allow_partial,
+                                        tracker,
+                                        pool,
+                                    },
+                                    group_idx,
+                                    pass_idx,
+                                );
+                                if !allow_partial && r.is_err() {
+                                    *result.write().unwrap() = r.map_err(From::from);
+                                }
+                            });
+                        }
+                    }
                 }
             });
         }
@@ -239,8 +265,8 @@ pub fn run_vardct_flow<S: Sample>(
         result.into_inner().unwrap()
     })()?;
 
-    // Per-tile transforms (dequant -> chroma-from-luma -> inverse DCT).
     let frame_ctx = FrameCtx {
+        device,
         frame_header: frame_declaration.frame_header,
         image_header: frame_declaration.image_header,
         low_frequency_global,

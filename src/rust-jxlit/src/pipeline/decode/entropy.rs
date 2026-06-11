@@ -7,12 +7,23 @@
 use jxl_bitstream::Bitstream;
 use jxl_modular::Sample;
 
+use crate::pipeline::gpu::{Device, kernels};
 use crate::vendor::jxl_frame::data::PassGroupParams;
 
 /// Entropy-decodes a single pass-group (one JXL group within one pass).
 pub fn read_pass_group<S: Sample>(
+    device: Device,
     bitstream: &mut Bitstream,
     params: PassGroupParams<S>,
+    group_idx: u32,
+    pass_idx: u32,
 ) -> crate::vendor::jxl_frame::Result<()> {
-    crate::vendor::jxl_frame::data::decode_pass_group(bitstream, params)
+    match device {
+        Device::Cpu => crate::vendor::jxl_frame::data::decode_pass_group(bitstream, params),
+        Device::Gpu => {
+            let _ = (bitstream, params);
+            kernels::read_pass_group_on_gpu(group_idx, pass_idx);
+            Ok(())
+        }
+    }
 }

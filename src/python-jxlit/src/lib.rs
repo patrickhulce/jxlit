@@ -108,6 +108,7 @@ fn decode_options_from_py(options: Option<DecodeOptions>) -> jxlit::DecodeOption
             threads: opts.threads,
             telemetry: opts.telemetry,
             layout: opts.layout.into(),
+            ..jxlit::DecodeOptions::default()
         },
         None => jxlit::DecodeOptions::default(),
     }

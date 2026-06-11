@@ -4,6 +4,16 @@ use std::fmt;
 
 use jxl_threadpool::JxlThreadPool;
 
+/// Hardware backend for decode compute.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Hardware {
+    /// CPU decode (default).
+    #[default]
+    Cpu,
+    /// GPU decode (VarDCT frames only; placeholders until kernels land).
+    Gpu,
+}
+
 /// Output pixel buffer layout for decoded samples.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum PixelLayout {
@@ -23,6 +33,8 @@ pub struct DecodeOptions {
     pub telemetry: bool,
     /// Flat `pixels` layout: interleaved HWC (default) or planar CHW.
     pub layout: PixelLayout,
+    /// Compute backend for decode. Defaults to CPU.
+    pub hardware: Hardware,
 }
 
 /// A single flat phase timing measure.

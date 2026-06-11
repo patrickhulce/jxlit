@@ -10,6 +10,7 @@ use jxl_grid::AlignedGrid;
 use jxl_modular::Sample;
 use jxl_threadpool::JxlThreadPool;
 
+use crate::pipeline::gpu::{DeviceImage, kernels};
 use crate::vendor::jxl_frame::data::LfGroup;
 use crate::vendor::jxl_frame::filter::{EdgePreservingFilter, Gabor};
 use crate::vendor::jxl_render::{ImageWithRegion, IndexedFrame, Region, Result, filter};
@@ -17,6 +18,31 @@ use crate::vendor::jxl_render::{ImageWithRegion, IndexedFrame, Region, Result, f
 /// Applies the Gabor-like and edge-preserving loop filters to the decoded color
 /// buffer in place.
 pub fn run_loop_filters<S: Sample>(
+    frame: &IndexedFrame,
+    fb: &mut DeviceImage,
+    color_padded_region: Region,
+    low_frequency_groups: &HashMap<u32, LfGroup<S>>,
+    pool: &JxlThreadPool,
+) -> Result<()> {
+    match fb {
+        DeviceImage::Cpu(image) => run_loop_filters_cpu(
+            frame,
+            image,
+            color_padded_region,
+            low_frequency_groups,
+            pool,
+        ),
+        DeviceImage::Gpu(_) => kernels::run_loop_filters_on_gpu(
+            frame,
+            fb,
+            color_padded_region,
+            low_frequency_groups,
+            pool,
+        ),
+    }
+}
+
+fn run_loop_filters_cpu<S: Sample>(
     frame: &IndexedFrame,
     fb: &mut ImageWithRegion,
     color_padded_region: Region,

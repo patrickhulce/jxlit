@@ -8,6 +8,7 @@ use std::sync::Arc;
 use jxl_modular::Sample;
 use jxl_threadpool::JxlThreadPool;
 
+use crate::pipeline::gpu::{DeviceImage, kernels};
 use crate::vendor::jxl_frame::data::LfGlobal;
 use crate::vendor::jxl_render::{
     Error, ImageWithRegion, IndexedFrame, Reference, Region, Result, blend, features,
@@ -16,6 +17,41 @@ use crate::vendor::jxl_render::{
 /// Renders patches, splines and noise into the decoded color buffer in place.
 #[allow(clippy::too_many_arguments)]
 pub fn run_features<S: Sample>(
+    frame: &IndexedFrame,
+    grid: &mut DeviceImage,
+    upsampling_valid_region: Region,
+    reference_grids: [Option<Reference<S>>; 4],
+    low_frequency_global: Option<&LfGlobal<S>>,
+    visible_frames_num: usize,
+    invisible_frames_num: usize,
+    pool: &JxlThreadPool,
+) -> Result<()> {
+    match grid {
+        DeviceImage::Cpu(image) => run_features_cpu(
+            frame,
+            image,
+            upsampling_valid_region,
+            reference_grids,
+            low_frequency_global,
+            visible_frames_num,
+            invisible_frames_num,
+            pool,
+        ),
+        DeviceImage::Gpu(_) => kernels::run_features_on_gpu(
+            frame,
+            grid,
+            upsampling_valid_region,
+            reference_grids,
+            low_frequency_global,
+            visible_frames_num,
+            invisible_frames_num,
+            pool,
+        ),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_features_cpu<S: Sample>(
     frame: &IndexedFrame,
     grid: &mut ImageWithRegion,
     upsampling_valid_region: Region,
