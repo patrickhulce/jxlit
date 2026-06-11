@@ -4,6 +4,8 @@ use std::fmt;
 
 use jxl_threadpool::JxlThreadPool;
 
+use crate::pipeline::gpu::GpuPixelBuffer;
+
 /// Hardware backend for decode compute.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Hardware {
@@ -11,6 +13,16 @@ pub enum Hardware {
     #[default]
     Cpu,
     /// GPU decode (VarDCT frames only; placeholders until kernels land).
+    Gpu,
+}
+
+/// Where decoded pixel samples should reside after decode completes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Destination {
+    /// Return pixels as a CPU `Vec<f32>` (default).
+    #[default]
+    Cpu,
+    /// Return pixels as a GPU buffer handle.
     Gpu,
 }
 
@@ -35,6 +47,8 @@ pub struct DecodeOptions {
     pub layout: PixelLayout,
     /// Compute backend for decode. Defaults to CPU.
     pub hardware: Hardware,
+    /// Where decoded pixel samples should reside. Defaults to CPU.
+    pub destination: Destination,
 }
 
 /// A single flat phase timing measure.
@@ -106,13 +120,49 @@ pub(crate) fn pool_for_options(options: &DecodeOptions) -> JxlThreadPool {
     }
 }
 
+/// Decoded pixel samples on CPU or GPU.
+#[derive(Debug)]
+pub enum DecodedPixels {
+    /// CPU-resident flat `f32` buffer (HWC when interleaved, CHW when planar).
+    Cpu(Vec<f32>),
+    /// GPU-resident buffer handle.
+    Gpu(GpuPixelBuffer),
+}
+
+impl DecodedPixels {
+    pub fn len(&self) -> usize {
+        match self {
+            Self::Cpu(v) => v.len(),
+            Self::Gpu(g) => g.len(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn cpu(self) -> Option<Vec<f32>> {
+        match self {
+            Self::Cpu(v) => Some(v),
+            Self::Gpu(_) => None,
+        }
+    }
+
+    pub fn as_cpu(&self) -> Option<&[f32]> {
+        match self {
+            Self::Cpu(v) => Some(v),
+            Self::Gpu(_) => None,
+        }
+    }
+}
+
 /// A decoded image as a flat `f32` buffer (HWC when interleaved, CHW when planar).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug)]
 pub struct DecodedImage {
     pub height: usize,
     pub width: usize,
     pub channels: usize,
-    pub pixels: Vec<f32>,
+    pub pixels: DecodedPixels,
     pub metadata: DecodeMetadata,
 }
 

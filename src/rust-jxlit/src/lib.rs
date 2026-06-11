@@ -4,9 +4,10 @@ mod types;
 mod vendor;
 
 pub use telemetry::{RebasedMeasure, RebasingTelemetry, rebase_telemetry};
+pub use crate::pipeline::gpu::GpuPixelBuffer;
 pub use types::{
-    DecodeError, DecodeMetadata, DecodeOptions, DecodeTelemetry, DecodedImage, Hardware, JxlitMeta,
-    Measure, PixelLayout,
+    DecodeError, DecodeMetadata, DecodeOptions, DecodeTelemetry, DecodedImage, DecodedPixels,
+    Destination, Hardware, JxlitMeta, Measure, PixelLayout,
 };
 
 pub fn decode(input: &[u8]) -> Result<DecodedImage, DecodeError> {

@@ -4,7 +4,10 @@ use std::path::PathBuf;
 use std::process;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use jxlit::{DecodeOptions, PixelLayout, RebasingTelemetry, decode_with_options, rebase_telemetry};
+use jxlit::{
+    DecodeOptions, Destination, Hardware, PixelLayout, RebasingTelemetry, decode_with_options,
+    rebase_telemetry,
+};
 
 const WARMUP_DECODES: usize = 3;
 const DEFAULT_ITERATIONS: usize = 100;
@@ -16,7 +19,45 @@ struct Options {
     iterations: usize,
     threads: Option<usize>,
     layout: PixelLayout,
+    hardware: Hardware,
+    destination: Destination,
     no_telemetry: bool,
+}
+
+fn parse_hardware(value: &str) -> Hardware {
+    match value {
+        "cpu" => Hardware::Cpu,
+        "gpu" => Hardware::Gpu,
+        _ => {
+            eprintln!("invalid --hardware value: {value} (expected cpu or gpu)");
+            process::exit(1);
+        }
+    }
+}
+
+fn parse_destination(value: &str) -> Destination {
+    match value {
+        "cpu" => Destination::Cpu,
+        "gpu" => Destination::Gpu,
+        _ => {
+            eprintln!("invalid --destination value: {value} (expected cpu or gpu)");
+            process::exit(1);
+        }
+    }
+}
+
+fn hardware_label(hardware: Hardware) -> &'static str {
+    match hardware {
+        Hardware::Cpu => "cpu",
+        Hardware::Gpu => "gpu",
+    }
+}
+
+fn destination_label(destination: Destination) -> &'static str {
+    match destination {
+        Destination::Cpu => "cpu",
+        Destination::Gpu => "gpu",
+    }
 }
 
 fn unix_time_ms() -> f64 {
@@ -33,6 +74,8 @@ fn parse_args() -> Options {
     let mut iterations = DEFAULT_ITERATIONS;
     let mut threads: Option<usize> = None;
     let mut layout = PixelLayout::Interleaved;
+    let mut hardware = Hardware::Cpu;
+    let mut destination = Destination::Cpu;
     let mut no_telemetry = false;
     let mut args = env::args().skip(1);
 
@@ -86,6 +129,20 @@ fn parse_args() -> Options {
                     }
                 };
             }
+            "--hardware" => {
+                let value = args.next().unwrap_or_else(|| {
+                    eprintln!("missing value for --hardware");
+                    process::exit(1);
+                });
+                hardware = parse_hardware(&value);
+            }
+            "--destination" => {
+                let value = args.next().unwrap_or_else(|| {
+                    eprintln!("missing value for --destination");
+                    process::exit(1);
+                });
+                destination = parse_destination(&value);
+            }
             "--no-telemetry" => no_telemetry = true,
             other => {
                 eprintln!("unknown argument: {other}");
@@ -97,8 +154,8 @@ fn parse_args() -> Options {
     let file = file.unwrap_or_else(|| DEFAULT_FILE.to_string());
     let action = action.unwrap_or_else(|| "decode_cpu".to_string());
 
-    if action != "decode_cpu" {
-        eprintln!("unsupported action: {action}");
+    if action != "decode_cpu" && action != "decode_gpu" {
+        eprintln!("unsupported action: {action} (expected decode_cpu or decode_gpu)");
         process::exit(1);
     }
 
@@ -113,6 +170,8 @@ fn parse_args() -> Options {
         iterations,
         threads,
         layout,
+        hardware,
+        destination,
         no_telemetry,
     }
 }
@@ -215,6 +274,8 @@ fn main() {
     let decode_options = DecodeOptions {
         threads: options.threads,
         layout: options.layout,
+        hardware: options.hardware,
+        destination: options.destination,
         ..DecodeOptions::default()
     };
 
@@ -263,6 +324,8 @@ fn main() {
         let telemetry_options = DecodeOptions {
             threads: options.threads,
             layout: options.layout,
+            hardware: options.hardware,
+            destination: options.destination,
             telemetry: true,
             ..DecodeOptions::default()
         };
@@ -287,8 +350,10 @@ fn main() {
     };
 
     println!(
-        "{{\"lang\":\"rust\",\"action\":\"{}\",\"iterations\":{},\"width\":{},\"height\":{},\"channels\":{},\"megapixels\":{:.6},\"decode_seconds\":{:.6},\"latency_ms\":{{\"mean\":{:.3},\"p50\":{:.3},\"p95\":{:.3},\"min\":{:.3},\"max\":{:.3}}}{}}}",
+        "{{\"lang\":\"rust\",\"action\":\"{}\",\"hardware\":\"{}\",\"destination\":\"{}\",\"iterations\":{},\"width\":{},\"height\":{},\"channels\":{},\"megapixels\":{:.6},\"decode_seconds\":{:.6},\"latency_ms\":{{\"mean\":{:.3},\"p50\":{:.3},\"p95\":{:.3},\"min\":{:.3},\"max\":{:.3}}}{}}}",
         options.action,
+        hardware_label(options.hardware),
+        destination_label(options.destination),
         options.iterations,
         width,
         height,

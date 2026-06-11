@@ -6,14 +6,18 @@
 #![allow(dead_code)]
 
 pub mod availability;
+pub mod context;
 pub mod device;
 pub mod environment;
 pub mod image;
 pub mod kernels;
+pub mod transfer;
 
+pub use context::GpuPixelBuffer;
 pub use device::{
     Device, DeviceCoefficients, DeviceColorGroups, DeviceImage, build_coefficient_buffer, from_cpu,
     from_cpu_arc, into_cpu_arc,
 };
 pub use environment::GpuEnvironment;
 pub use image::GpuImageWithRegion;
+pub use transfer::{download_pixels, upload_pixels};

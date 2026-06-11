@@ -2,6 +2,8 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::{DecodeOptions, Hardware, PixelLayout, decode, decode_with_options};
+#[cfg(feature = "gpu")]
+use crate::{Destination, pipeline::gpu::{download_pixels, GpuEnvironment}};
 
 fn assets_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -62,7 +64,7 @@ fn decode_colors_fixture_is_close_to_png() {
     assert_eq!(decoded.channels, png_channels);
     assert_eq!(decoded.pixels.len(), png_pixels.len());
 
-    let mae = mean_abs_error(&decoded.pixels, &png_pixels);
+    let mae = mean_abs_error(decoded.pixels.as_cpu().expect("cpu pixels"), &png_pixels);
     assert!(
         mae < 0.02,
         "mean absolute error {mae} exceeds tolerance 0.02"
@@ -166,4 +168,82 @@ fn decode_telemetry_collects_flat_measures() {
     for measure in &telemetry.measures {
         assert!(measure.start_ms <= telemetry.total_ms);
     }
+}
+
+#[cfg(feature = "gpu")]
+#[test]
+fn decode_gpu_export_matches_cpu_pixels() {
+    if !GpuEnvironment::current().device_available {
+        eprintln!("skipping decode_gpu_export_matches_cpu_pixels: no GPU adapter");
+        return;
+    }
+
+    let assets = assets_dir();
+    let jxl_path = assets.join("colors_e1_d0p5_fd4.jxl");
+    let jxl_bytes = fs::read(&jxl_path).expect("read jxl fixture");
+
+    let cpu = decode_with_options(
+        &jxl_bytes,
+        &DecodeOptions {
+            hardware: Hardware::Gpu,
+            destination: Destination::Cpu,
+            ..DecodeOptions::default()
+        },
+    )
+    .expect("GPU decode with CPU destination");
+
+    let cpu_default = decode(&jxl_bytes).expect("default CPU decode");
+    let cpu_pixels = cpu.pixels.as_cpu().expect("cpu pixels");
+    let default_pixels = cpu_default.pixels.as_cpu().expect("cpu pixels");
+    assert_eq!(cpu_pixels.len(), default_pixels.len());
+
+    let mae = mean_abs_error(cpu_pixels, default_pixels);
+    assert!(
+        mae < 1e-5,
+        "GPU export CPU destination MAE {mae} exceeds tolerance"
+    );
+}
+
+#[cfg(feature = "gpu")]
+#[test]
+fn decode_gpu_destination_returns_gpu_handle() {
+    if !GpuEnvironment::current().device_available {
+        eprintln!("skipping decode_gpu_destination_returns_gpu_handle: no GPU adapter");
+        return;
+    }
+
+    let assets = assets_dir();
+    let jxl_path = assets.join("colors_e1_d0p5_fd4.jxl");
+    let jxl_bytes = fs::read(&jxl_path).expect("read jxl fixture");
+
+    let decoded = decode_with_options(
+        &jxl_bytes,
+        &DecodeOptions {
+            hardware: Hardware::Gpu,
+            destination: Destination::Gpu,
+            ..DecodeOptions::default()
+        },
+    )
+    .expect("GPU decode with GPU destination");
+
+    let gpu = match decoded.pixels {
+        crate::DecodedPixels::Gpu(g) => g,
+        crate::DecodedPixels::Cpu(_) => panic!("expected GPU pixel buffer"),
+    };
+    assert_eq!(
+        gpu.len(),
+        decoded.width * decoded.height * decoded.channels
+    );
+
+    let downloaded = download_pixels(&gpu).expect("download GPU pixels");
+    let reference_decoded = decode(&jxl_bytes).expect("reference decode");
+    let reference = reference_decoded
+        .pixels
+        .as_cpu()
+        .expect("reference cpu pixels");
+    let mae = mean_abs_error(&downloaded, reference);
+    assert!(
+        mae < 1e-5,
+        "GPU destination download MAE {mae} exceeds tolerance"
+    );
 }

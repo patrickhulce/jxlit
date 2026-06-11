@@ -70,7 +70,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--action",
         default=DEFAULT_ACTION,
-        help="Benchmark action (only decode_cpu is supported)",
+        help="Benchmark action label (decode_cpu or decode_gpu)",
     )
     parser.add_argument(
         "--iterations",
@@ -105,6 +105,18 @@ def parse_args() -> argparse.Namespace:
         choices=("interleaved", "planar"),
         default="interleaved",
         help="Pixel buffer layout (default: interleaved)",
+    )
+    parser.add_argument(
+        "--hardware",
+        choices=("cpu", "gpu"),
+        default="cpu",
+        help="Decode compute backend (default: cpu)",
+    )
+    parser.add_argument(
+        "--destination",
+        choices=("cpu", "gpu"),
+        default="cpu",
+        help="Where decoded pixels reside (default: cpu)",
     )
     return parser.parse_args()
 
@@ -145,6 +157,8 @@ def build_command(
     threads: int | None,
     no_telemetry: bool,
     layout: str,
+    hardware: str,
+    destination: str,
 ) -> list[str]:
     common = [
         "--file",
@@ -162,6 +176,7 @@ def build_command(
         common.append("--no-telemetry")
 
     if lang == "rust":
+        common.extend(["--hardware", hardware, "--destination", destination])
         binary = REPO_ROOT / "target" / "release" / "jxlit-benchmark"
         return [str(binary), *common]
 
@@ -192,9 +207,25 @@ def run_worker(
     threads: int | None,
     no_telemetry: bool,
     layout: str,
+    hardware: str,
+    destination: str,
 ) -> WorkerResult:
+    if lang != "rust" and (hardware != "cpu" or destination != "cpu"):
+        raise RuntimeError(
+            f"{lang} bindings do not support --hardware/--destination yet "
+            f"(requested hardware={hardware}, destination={destination})",
+        )
+
     command = build_command(
-        lang, file_path, action, iterations, threads, no_telemetry, layout
+        lang,
+        file_path,
+        action,
+        iterations,
+        threads,
+        no_telemetry,
+        layout,
+        hardware,
+        destination,
     )
     if lang == "python":
         cwd = REPO_ROOT / "src" / "python-jxlit"
@@ -296,6 +327,8 @@ def run_language_batch(
     threads: int | None,
     no_telemetry: bool,
     layout: str,
+    hardware: str,
+    destination: str,
 ) -> tuple[LanguageSummary, dict[str, Any] | None]:
     batch_start = time.perf_counter()
     results: list[WorkerResult] = []
@@ -311,6 +344,8 @@ def run_language_batch(
                 threads,
                 no_telemetry,
                 layout,
+                hardware,
+                destination,
             )
             for _ in range(workers)
         ]
@@ -410,6 +445,9 @@ def save_raw_telemetry(
     threads: int | None,
     iterations: int,
     workers: int,
+    layout: str,
+    hardware: str,
+    destination: str,
 ) -> Path:
     """Persist a language's rebased telemetry plus run context to disk."""
     RAW_DIR.mkdir(parents=True, exist_ok=True)
@@ -419,6 +457,9 @@ def save_raw_telemetry(
         "threads": threads,
         "iterations": iterations,
         "workers": workers,
+        "layout": layout,
+        "hardware": hardware,
+        "destination": destination,
         **telemetry,
     }
     out_path = RAW_DIR / f"{lang}_{stamp}.json"
@@ -449,8 +490,11 @@ def print_cross_language_table(summaries: list[LanguageSummary]) -> None:
 def main() -> None:
     args = parse_args()
 
-    if args.action != "decode_cpu":
-        print(f"unsupported action: {args.action}", file=sys.stderr)
+    if args.action not in {"decode_cpu", "decode_gpu"}:
+        print(
+            f"unsupported action: {args.action} (expected decode_cpu or decode_gpu)",
+            file=sys.stderr,
+        )
         raise SystemExit(1)
 
     if args.iterations <= 0:
@@ -476,7 +520,7 @@ def main() -> None:
         f"benchmark action={args.action} file={file_path.name} "
         f"iterations/worker={args.iterations} workers={args.workers} "
         f"threads={args.threads if args.threads is not None else 'auto'} "
-        f"layout={args.layout}"
+        f"layout={args.layout} hardware={args.hardware} destination={args.destination}"
     )
 
     summaries: list[LanguageSummary] = []
@@ -491,6 +535,8 @@ def main() -> None:
             threads=args.threads,
             no_telemetry=args.no_telemetry,
             layout=args.layout,
+            hardware=args.hardware,
+            destination=args.destination,
         )
         summaries.append(summary)
         print_language_summary(summary)
@@ -513,6 +559,9 @@ def main() -> None:
                     threads=args.threads,
                     iterations=args.iterations,
                     workers=args.workers,
+                    layout=args.layout,
+                    hardware=args.hardware,
+                    destination=args.destination,
                 )
                 print(f"wrote {out_path.relative_to(REPO_ROOT)}")
 

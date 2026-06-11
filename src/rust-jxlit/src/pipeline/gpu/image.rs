@@ -1,8 +1,7 @@
 //! GPU-side mirrors of the vendored image buffer types.
-//!
-//! Fields and method names match [`crate::vendor::jxl_render::ImageWithRegion`] so
-//! the pipeline can share structure; bodies are placeholders until real GPU
-//! allocation and kernels land.
+
+#[cfg(feature = "gpu")]
+use std::sync::Arc;
 
 use jxl_grid::AllocTracker;
 use jxl_image::BitDepth;
@@ -10,14 +9,42 @@ use jxl_modular::{ChannelShift, Sample};
 
 use crate::vendor::jxl_frame::FrameHeader;
 use crate::vendor::jxl_frame::data::GlobalModular;
-use crate::vendor::jxl_render::{ImageBuffer, ImageWithRegion, Region, Result};
+#[cfg(feature = "gpu")]
+use crate::vendor::jxl_render::ImageBuffer;
+use crate::vendor::jxl_render::{ImageWithRegion, Region, Result};
+
+#[cfg(feature = "gpu")]
+use super::context::GpuContext;
+
+/// Sample storage kind for a GPU channel buffer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GpuSampleKind {
+    F32,
+    I32,
+    I16,
+}
 
 /// Mirror of [`ImageBuffer`] for GPU-resident channel storage.
 #[derive(Debug)]
 pub enum GpuImageBuffer {
-    F32 { width: usize, height: usize },
-    I32 { width: usize, height: usize },
-    I16 { width: usize, height: usize },
+    F32 {
+        width: usize,
+        height: usize,
+        #[cfg(feature = "gpu")]
+        buffer: Arc<wgpu::Buffer>,
+    },
+    I32 {
+        width: usize,
+        height: usize,
+        #[cfg(feature = "gpu")]
+        buffer: Arc<wgpu::Buffer>,
+    },
+    I16 {
+        width: usize,
+        height: usize,
+        #[cfg(feature = "gpu")]
+        buffer: Arc<wgpu::Buffer>,
+    },
 }
 
 impl GpuImageBuffer {
@@ -31,6 +58,102 @@ impl GpuImageBuffer {
         match self {
             Self::F32 { height, .. } | Self::I32 { height, .. } | Self::I16 { height, .. } => {
                 *height
+            }
+        }
+    }
+
+    pub fn sample_kind(&self) -> GpuSampleKind {
+        match self {
+            Self::F32 { .. } => GpuSampleKind::F32,
+            Self::I32 { .. } => GpuSampleKind::I32,
+            Self::I16 { .. } => GpuSampleKind::I16,
+        }
+    }
+
+    #[cfg(feature = "gpu")]
+    pub fn wgpu_buffer(&self) -> &wgpu::Buffer {
+        match self {
+            Self::F32 { buffer, .. }
+            | Self::I32 { buffer, .. }
+            | Self::I16 { buffer, .. } => buffer,
+        }
+    }
+
+    #[cfg(feature = "gpu")]
+    fn empty_f32(width: usize, height: usize, ctx: &GpuContext) -> Self {
+        let len = width * height;
+        let byte_len = len * std::mem::size_of::<f32>();
+        let buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("jxlit_gpu_f32"),
+            size: byte_len.max(4) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        Self::F32 {
+            width,
+            height,
+            buffer: Arc::new(buffer),
+        }
+    }
+
+    #[cfg(not(feature = "gpu"))]
+    fn empty_f32(width: usize, height: usize) -> Self {
+        Self::F32 { width, height }
+    }
+
+    #[cfg(feature = "gpu")]
+    fn from_cpu_grid(buf: &ImageBuffer, ctx: &GpuContext) -> Self {
+        match buf {
+            ImageBuffer::F32(g) => {
+                let width = g.width();
+                let height = g.height();
+                let bytes = bytemuck::cast_slice(g.buf());
+                let buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("jxlit_gpu_f32"),
+                    size: bytes.len().max(4) as u64,
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
+                    mapped_at_creation: false,
+                });
+                ctx.queue.write_buffer(&buffer, 0, bytes);
+                Self::F32 {
+                    width,
+                    height,
+                    buffer: Arc::new(buffer),
+                }
+            }
+            ImageBuffer::I32(g) => {
+                let width = g.width();
+                let height = g.height();
+                let bytes = bytemuck::cast_slice(g.buf());
+                let buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("jxlit_gpu_i32"),
+                    size: bytes.len().max(4) as u64,
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
+                    mapped_at_creation: false,
+                });
+                ctx.queue.write_buffer(&buffer, 0, bytes);
+                Self::I32 {
+                    width,
+                    height,
+                    buffer: Arc::new(buffer),
+                }
+            }
+            ImageBuffer::I16(g) => {
+                let width = g.width();
+                let height = g.height();
+                let bytes = bytemuck::cast_slice(g.buf());
+                let buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("jxlit_gpu_i16"),
+                    size: bytes.len().max(4) as u64,
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
+                    mapped_at_creation: false,
+                });
+                ctx.queue.write_buffer(&buffer, 0, bytes);
+                Self::I16 {
+                    width,
+                    height,
+                    buffer: Arc::new(buffer),
+                }
             }
         }
     }
@@ -154,34 +277,29 @@ impl GpuImageWithRegion {
         self.ct_done = ct_done;
     }
 
-    /// Builds a GPU mirror with the same channel geometry as a CPU image (placeholder upload).
-    pub fn from_cpu_placeholder(cpu: &ImageWithRegion) -> Self {
-        let mut gpu = Self::new(cpu.color_channels(), cpu.alloc_tracker());
-        for (buf, (region, shift)) in cpu.buffer().iter().zip(cpu.regions_and_shifts()) {
-            let buffer = match buf {
-                ImageBuffer::F32(g) => GpuImageBuffer::F32 {
-                    width: g.width(),
-                    height: g.height(),
-                },
-                ImageBuffer::I32(g) => GpuImageBuffer::I32 {
-                    width: g.width(),
-                    height: g.height(),
-                },
-                ImageBuffer::I16(g) => GpuImageBuffer::I16 {
-                    width: g.width(),
-                    height: g.height(),
-                },
-            };
-            gpu.append_channel_shifted(buffer, *region, *shift);
+    /// Materializes a CPU image on the GPU via raw-byte upload (cold start).
+    pub fn from_cpu(cpu: &ImageWithRegion) -> std::result::Result<Self, String> {
+        #[cfg(feature = "gpu")]
+        {
+            let ctx = GpuContext::get().ok_or_else(|| "GPU device unavailable".to_string())?;
+            let mut gpu = Self::new(cpu.color_channels(), cpu.alloc_tracker());
+            for (buf, (region, shift)) in cpu.buffer().iter().zip(cpu.regions_and_shifts()) {
+                let buffer = GpuImageBuffer::from_cpu_grid(buf, ctx);
+                gpu.append_channel_shifted(buffer, *region, *shift);
+            }
+            Ok(gpu)
         }
-        gpu
+        #[cfg(not(feature = "gpu"))]
+        {
+            let _ = cpu;
+            Err("GPU feature not enabled".to_string())
+        }
     }
 
     pub fn try_clone(&self) -> Result<Self> {
         unimplemented!("GPU path not implemented: try_clone");
     }
 
-    /// Carves per-group coefficient sub-grids (mirrors the CPU layout).
     pub fn color_groups_with_group_id(
         &mut self,
         _frame_header: &FrameHeader,
@@ -206,16 +324,28 @@ pub fn alloc_coefficient_buffer(
         let (w8, h8) = shift.shift_size((width.div_ceil(8), height.div_ceil(8)));
         let width = w8 * 8;
         let height = h8 * 8;
-        let buffer = GpuImageBuffer::F32 {
-            width: width as usize,
-            height: height as usize,
+        #[cfg(feature = "gpu")]
+        let buffer = {
+            let ctx = GpuContext::get().expect("GPU context required for coefficient buffer");
+            GpuImageBuffer::empty_f32(width as usize, height as usize, ctx)
         };
+        #[cfg(not(feature = "gpu"))]
+        let buffer = GpuImageBuffer::empty_f32(width as usize, height as usize);
         color_buffer.append_channel_shifted(buffer, modular_region, shift);
     }
     color_buffer
 }
 
-/// Converts a CPU [`ImageBuffer`] reference for export sampling (GPU path only).
-pub fn as_cpu_buffer_ref(_buffer: &GpuImageBuffer) -> &ImageBuffer {
-    unimplemented!("GPU path not implemented: download buffer for export");
+/// Sample kind + bit depth encoding for WGSL export metadata.
+pub fn sample_kind_bits(sample_kind: GpuSampleKind, bit_depth: BitDepth) -> (u32, u32) {
+    let kind = match sample_kind {
+        GpuSampleKind::F32 => 0,
+        GpuSampleKind::I32 => 1,
+        GpuSampleKind::I16 => 2,
+    };
+    let bits = match bit_depth {
+        BitDepth::IntegerSample { bits_per_sample } => bits_per_sample,
+        BitDepth::FloatSample { bits_per_sample, .. } => bits_per_sample,
+    };
+    (kind, bits)
 }

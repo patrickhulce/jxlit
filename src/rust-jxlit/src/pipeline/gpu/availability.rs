@@ -10,6 +10,8 @@
 use std::collections::HashMap;
 
 use crate::types::{DecodeOptions, PixelLayout};
+#[cfg(feature = "gpu")]
+use crate::types::Hardware;
 use crate::vendor::jxl_frame::FrameHeader;
 use crate::vendor::jxl_frame::data::{HfGlobal, LfGlobal, LfGroup};
 use crate::vendor::jxl_render::{IndexedFrame, Reference, Region, RenderContext};
@@ -178,11 +180,15 @@ pub fn run_interleave_available(
     _width: u32,
     _height: u32,
     _channels: usize,
-    _layout: PixelLayout,
-    _options: &DecodeOptions,
-    _env: GpuEnvironment,
+    layout: PixelLayout,
+    options: &DecodeOptions,
+    env: GpuEnvironment,
+    has_spot_colors: bool,
+    has_float_sample: bool,
 ) -> bool {
-    false
+    gpu_export_base_available(layout, PixelLayout::Interleaved, options, env)
+        && !has_spot_colors
+        && !has_float_sample
 }
 
 pub fn run_export_planar_available(
@@ -191,7 +197,34 @@ pub fn run_export_planar_available(
     _width: u32,
     _height: u32,
     _channels: usize,
+    layout: PixelLayout,
+    options: &DecodeOptions,
+    env: GpuEnvironment,
+    has_spot_colors: bool,
+    has_float_sample: bool,
+) -> bool {
+    gpu_export_base_available(layout, PixelLayout::Planar, options, env)
+        && !has_spot_colors
+        && !has_float_sample
+}
+
+#[cfg(feature = "gpu")]
+fn gpu_export_base_available(
+    layout: PixelLayout,
+    required: PixelLayout,
+    options: &DecodeOptions,
+    env: GpuEnvironment,
+) -> bool {
+    options.hardware == Hardware::Gpu
+        && env.device_available
+        && layout == required
+        && super::context::GpuContext::get().is_some()
+}
+
+#[cfg(not(feature = "gpu"))]
+fn gpu_export_base_available(
     _layout: PixelLayout,
+    _required: PixelLayout,
     _options: &DecodeOptions,
     _env: GpuEnvironment,
 ) -> bool {

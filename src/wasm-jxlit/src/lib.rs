@@ -238,6 +238,12 @@ fn metadata_from_rust(metadata: &jxlit::DecodeMetadata) -> DecodeMetadata {
     }
 }
 
+fn pixels_from_rust(pixels: jxlit::DecodedPixels) -> Result<Vec<f32>, JsError> {
+    pixels.cpu().ok_or_else(|| {
+        JsError::new("GPU pixel buffers are not supported in WASM bindings")
+    })
+}
+
 #[wasm_bindgen]
 pub fn decode(input: &[u8], options: Option<DecodeOptions>) -> Result<DecodedImage, JsError> {
     let decode_options = match options {
@@ -255,7 +261,7 @@ pub fn decode(input: &[u8], options: Option<DecodeOptions>) -> Result<DecodedIma
         height: decoded.height,
         width: decoded.width,
         channels: decoded.channels,
-        pixels: decoded.pixels,
+        pixels: pixels_from_rust(decoded.pixels)?,
         metadata: metadata_from_rust(&decoded.metadata),
     })
 }

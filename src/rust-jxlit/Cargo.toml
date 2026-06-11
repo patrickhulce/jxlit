@@ -10,15 +10,15 @@ license.workspace = true
 crate-type = ["rlib"]
 
 [features]
-default = ["rayon"]
+default = ["rayon", "gpu"]
 rayon = ["jxl-threadpool/rayon"]
-gpu = ["dep:wgpu"]
+gpu = ["dep:wgpu", "dep:pollster"]
 
 [dependencies]
 # Direct deps used by our pipeline and by the vendored sub-crates (the vendored
 # jxl-render/jxl-frame/jxl-vardct live under src/vendor). Versions match the set
 # resolved in Cargo.lock that the vendored sources were copied against.
-bytemuck = "1.19"
+bytemuck = { version = "1.19", features = ["derive"] }
 jxl-bitstream = "1.1"
 jxl-coding = "1.0"
 jxl-color = "0.11"
@@ -29,6 +29,7 @@ jxl-oxide-common = "1.0"
 jxl-threadpool = { version = "1.0", default-features = false }
 tracing = { version = "0.1", default-features = false, features = ["std"] }
 web-time = "1"
+pollster = { version = "0.4", optional = true }
 wgpu = { version = "24", optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]

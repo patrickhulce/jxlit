@@ -1,22 +1,30 @@
-//! Panicking GPU kernel placeholders for each forked pipeline step.
+//! GPU compute kernels for pipeline steps.
 
 #![allow(clippy::too_many_arguments)]
 
 use std::collections::HashMap;
 use std::sync::Arc;
+#[cfg(feature = "gpu")]
+use std::sync::OnceLock;
 
 use jxl_grid::SharedSubgrid;
 use jxl_image::{BitDepth, ImageHeader};
 use jxl_modular::Sample;
 use jxl_threadpool::JxlThreadPool;
 
+use crate::types::PixelLayout;
 use crate::vendor::jxl_frame::FrameHeader;
 use crate::vendor::jxl_frame::data::{HfGlobal, LfGlobal, LfGroup};
 use crate::vendor::jxl_render::{IndexedFrame, Reference, Region, RenderContext, Result};
 use crate::vendor::jxl_vardct::LfChannelCorrelation;
 
+use super::context::GpuPixelBuffer;
+#[cfg(feature = "gpu")]
+use super::context::GpuContext;
 use super::device::{DeviceCoefficients, DeviceImage};
 use super::image::GpuImageWithRegion;
+#[cfg(feature = "gpu")]
+use super::image::sample_kind_bits;
 
 macro_rules! gpu_unimplemented {
     ($name:literal) => {
@@ -124,31 +132,352 @@ pub fn run_xyb2rgb_on_gpu(
     gpu_unimplemented!("run_xyb2rgb");
 }
 
+/// GPU-only export: reads GPU-resident channel buffers and writes interleaved HWC output.
 pub fn run_interleave_on_gpu(
-    _pixels: &mut [f32],
-    _image: &DeviceImage,
-    _bit_depth: &[BitDepth],
-    _start_offset_xy: &[(i32, i32)],
-    _orientation: u32,
-    _width: u32,
-    _height: u32,
-    _channels: usize,
-) -> usize {
-    gpu_unimplemented!("run_interleave");
+    image: &GpuImageWithRegion,
+    channel_indices: &[usize],
+    bit_depth: &[BitDepth],
+    start_offset_xy: &[(i32, i32)],
+    orientation: u32,
+    width: u32,
+    height: u32,
+    channels: usize,
+) -> std::result::Result<GpuPixelBuffer, String> {
+    run_export_on_gpu(
+        image,
+        channel_indices,
+        bit_depth,
+        start_offset_xy,
+        orientation,
+        width,
+        height,
+        channels,
+        PixelLayout::Interleaved,
+    )
 }
 
+/// GPU-only export: reads GPU-resident channel buffers and writes planar CHW output.
 pub fn run_export_planar_on_gpu(
-    _pixels: &mut [f32],
-    _image: &DeviceImage,
-    _bit_depth: &[BitDepth],
-    _start_offset_xy: &[(i32, i32)],
-    _orientation: u32,
-    _width: u32,
-    _height: u32,
-    _channels: usize,
-    _plane_size: usize,
-) -> usize {
-    gpu_unimplemented!("run_export_planar");
+    image: &GpuImageWithRegion,
+    channel_indices: &[usize],
+    bit_depth: &[BitDepth],
+    start_offset_xy: &[(i32, i32)],
+    orientation: u32,
+    width: u32,
+    height: u32,
+    channels: usize,
+    plane_size: usize,
+) -> std::result::Result<GpuPixelBuffer, String> {
+    let _ = plane_size;
+    run_export_on_gpu(
+        image,
+        channel_indices,
+        bit_depth,
+        start_offset_xy,
+        orientation,
+        width,
+        height,
+        channels,
+        PixelLayout::Planar,
+    )
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct ExportParams {
+    orientation: u32,
+    out_width: u32,
+    out_height: u32,
+    channels: u32,
+    pixel_layout: u32,
+    plane_size: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct ChannelMeta {
+    offset_x: i32,
+    offset_y: i32,
+    grid_width: u32,
+    grid_height: u32,
+    sample_kind: u32,
+    bits_per_sample: u32,
+    base_u32: u32,
+}
+
+#[cfg(feature = "gpu")]
+struct ExportPipeline {
+    pipeline: wgpu::ComputePipeline,
+    bind_group_layout: wgpu::BindGroupLayout,
+}
+
+#[cfg(feature = "gpu")]
+use wgpu::util::DeviceExt;
+
+#[cfg(feature = "gpu")]
+fn export_pipeline(ctx: &GpuContext) -> &'static ExportPipeline {
+    static PIPELINE: OnceLock<Option<ExportPipeline>> = OnceLock::new();
+    PIPELINE
+        .get_or_init(|| build_export_pipeline(ctx).ok())
+        .as_ref()
+        .expect("failed to build export compute pipeline")
+}
+
+#[cfg(feature = "gpu")]
+fn build_export_pipeline(ctx: &GpuContext) -> std::result::Result<ExportPipeline, String> {
+    let shader = ctx
+        .device
+        .create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("jxlit_export"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/export.wgsl").into()),
+        });
+
+    let bind_group_layout = ctx
+        .device
+        .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("jxlit_export_layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+
+    let pipeline_layout = ctx
+        .device
+        .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("jxlit_export_pipeline_layout"),
+            bind_group_layouts: &[&bind_group_layout],
+            push_constant_ranges: &[],
+        });
+
+    let pipeline = ctx
+        .device
+        .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("jxlit_export"),
+            layout: Some(&pipeline_layout),
+            module: &shader,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+
+    Ok(ExportPipeline {
+        pipeline,
+        bind_group_layout,
+    })
+}
+
+#[cfg(feature = "gpu")]
+fn channel_byte_len(grid: &super::image::GpuImageBuffer) -> u64 {
+    let pixels = (grid.width() * grid.height()) as u64;
+    match grid.sample_kind() {
+        super::image::GpuSampleKind::F32 | super::image::GpuSampleKind::I32 => pixels * 4,
+        super::image::GpuSampleKind::I16 => pixels * 2,
+    }
+}
+
+#[cfg(feature = "gpu")]
+fn align_bytes(len: u64) -> u64 {
+    (len + 3) & !3
+}
+
+fn run_export_on_gpu(
+    image: &GpuImageWithRegion,
+    channel_indices: &[usize],
+    bit_depth: &[BitDepth],
+    start_offset_xy: &[(i32, i32)],
+    orientation: u32,
+    width: u32,
+    height: u32,
+    channels: usize,
+    layout: PixelLayout,
+) -> std::result::Result<GpuPixelBuffer, String> {
+    #[cfg(feature = "gpu")]
+    {
+        if channels > 8 {
+            return Err(format!("GPU export supports at most 8 channels, got {channels}"));
+        }
+
+        let ctx = GpuContext::get().ok_or_else(|| "GPU device unavailable".to_string())?;
+        let export = export_pipeline(ctx);
+        let plane_size = (width as usize) * (height as usize);
+        let out_len = plane_size * channels;
+        let layout_flag = match layout {
+            PixelLayout::Interleaved => 0,
+            PixelLayout::Planar => 1,
+        };
+
+        let params = ExportParams {
+            orientation,
+            out_width: width,
+            out_height: height,
+            channels: channels as u32,
+            pixel_layout: layout_flag,
+            plane_size: plane_size as u32,
+        };
+        let params_buffer = ctx.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("jxlit_export_params"),
+            contents: bytemuck::bytes_of(&params),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+
+        let mut metas = [ChannelMeta {
+            offset_x: 0,
+            offset_y: 0,
+            grid_width: 1,
+            grid_height: 1,
+            sample_kind: 0,
+            bits_per_sample: 32,
+            base_u32: 0,
+        }; 8];
+        let buffers = image.buffer();
+        let mut packed_size = 0u64;
+        let mut channel_copies: Vec<(&wgpu::Buffer, u64, u64)> = Vec::with_capacity(channels);
+        for slot in 0..channels {
+            let idx = channel_indices[slot];
+            let grid = &buffers[idx];
+            let (sample_kind, bits) = sample_kind_bits(grid.sample_kind(), bit_depth[slot]);
+            let (offset_x, offset_y) = start_offset_xy[slot];
+            let byte_len = channel_byte_len(grid);
+            metas[slot] = ChannelMeta {
+                offset_x,
+                offset_y,
+                grid_width: grid.width() as u32,
+                grid_height: grid.height() as u32,
+                sample_kind,
+                bits_per_sample: bits,
+                base_u32: (packed_size / 4) as u32,
+            };
+            channel_copies.push((grid.wgpu_buffer(), packed_size, byte_len));
+            packed_size += align_bytes(byte_len);
+        }
+
+        let packed_buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("jxlit_export_packed_channels"),
+            size: packed_size.max(4),
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let meta_buffer = ctx.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("jxlit_export_meta"),
+            contents: bytemuck::cast_slice(&metas),
+            usage: wgpu::BufferUsages::STORAGE,
+        });
+
+        let output_buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("jxlit_export_output"),
+            size: (out_len * std::mem::size_of::<f32>()) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+
+        let bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("jxlit_export_bind_group"),
+            layout: &export.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: params_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: meta_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: packed_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: output_buffer.as_entire_binding(),
+                },
+            ],
+        });
+
+        let mut encoder = ctx
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("jxlit_export_encoder"),
+            });
+        for (src, dst_off, len) in channel_copies {
+            encoder.copy_buffer_to_buffer(src, 0, &packed_buffer, dst_off, len);
+        }
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("jxlit_export_pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&export.pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            let wg_x = width.div_ceil(8);
+            let wg_y = height.div_ceil(8);
+            pass.dispatch_workgroups(wg_x, wg_y, 1);
+        }
+        ctx.queue.submit(std::iter::once(encoder.finish()));
+
+        Ok(GpuPixelBuffer::new(
+            Arc::new(output_buffer),
+            width,
+            height,
+            channels as u32,
+            layout,
+            out_len,
+        ))
+    }
+    #[cfg(not(feature = "gpu"))]
+    {
+        let _ = (
+            image,
+            channel_indices,
+            bit_depth,
+            start_offset_xy,
+            orientation,
+            width,
+            height,
+            channels,
+            layout,
+        );
+        Err("GPU feature not enabled".to_string())
+    }
 }
 
 pub fn build_low_frequency_image_on_gpu(_low_frequency_image: GpuImageWithRegion) -> DeviceImage {

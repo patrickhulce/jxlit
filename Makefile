@@ -5,14 +5,16 @@
         typecheck-python typecheck-node typecheck-wasm \
         format-rust format-python format-node format-wasm \
         test-rust test-python test-node test-wasm \
-        benchmark-rust benchmark-python benchmark-node benchmark-wasm
+        benchmark-rust benchmark-rust-gpu benchmark-gpu benchmark-python benchmark-node benchmark-wasm
 
 WORKERS ?= 2
 THREADS ?= 2
 ITERATIONS ?= 25
 LAYOUT ?= planar
+HARDWARE ?= cpu
+DESTINATION ?= cpu
 FILE ?= assets/frame_4K_10bit_e1_d0p5_fd4.jxl
-BENCHMARK_ARGS = --workers $(WORKERS) --iterations $(ITERATIONS) --file $(FILE) --threads $(THREADS) --layout $(LAYOUT)
+BENCHMARK_ARGS = --workers $(WORKERS) --iterations $(ITERATIONS) --file $(FILE) --threads $(THREADS) --layout $(LAYOUT) --hardware $(HARDWARE) --destination $(DESTINATION)
 
 all: build lint typecheck test
 
@@ -113,6 +115,14 @@ benchmark: build-bench-rust build-bench-python build-node build-wasm
 
 benchmark-rust: build-bench-rust
 	python3 scripts/benchmark.py $(BENCHMARK_ARGS) --langs rust
+
+benchmark-rust-gpu: build-bench-rust
+	python3 scripts/benchmark.py $(BENCHMARK_ARGS) --langs rust \
+		--hardware gpu --destination gpu --layout planar
+
+benchmark-gpu: build-bench-rust
+	python3 scripts/benchmark.py $(BENCHMARK_ARGS) --langs rust \
+		--hardware gpu --destination gpu --layout planar --action decode_gpu
 
 benchmark-python: build-bench-python
 	python3 scripts/benchmark.py $(BENCHMARK_ARGS) --langs python
