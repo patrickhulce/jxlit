@@ -10,10 +10,12 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+RAW_DIR = REPO_ROOT / ".data" / "benchmarks" / "raw"
 DEFAULT_FILE = REPO_ROOT / "assets" / "frame_4K_10bit_e1_d0p5_fd4.jxl"
 DEFAULT_ACTION = "decode_cpu"
 DEFAULT_ITERATIONS = 100
@@ -367,23 +369,47 @@ def print_phase_summary(
         ),
         None,
     )
-    total_ns = int(outer["duration_ns"]) if isinstance(outer, dict) else int(
-        telemetry.get("total_ns", 0)
+    total_ms = float(outer["duration_ms"]) if isinstance(outer, dict) else float(
+        telemetry.get("total_ms", 0)
     )
 
     ranked = sorted(
         (measure for measure in measures if isinstance(measure, dict)),
-        key=lambda measure: int(measure.get("duration_ns", 0)),
+        key=lambda measure: float(measure.get("duration_ms", 0)),
         reverse=True,
     )[:top_n]
 
     print(f"\n== phase breakdown ({lang}) ==")
     for measure in ranked:
         name = str(measure.get("name", ""))
-        duration_ns = int(measure.get("duration_ns", 0))
-        ms = duration_ns / 1_000_000.0
-        pct = 100.0 * duration_ns / total_ns if total_ns else 0.0
-        print(f"{name:<16} {ms:8.2f}ms {pct:6.1f}%")
+        duration_ms = float(measure.get("duration_ms", 0))
+        pct = 100.0 * duration_ms / total_ms if total_ms else 0.0
+        print(f"{name:<16} {duration_ms:8.2f}ms {pct:6.1f}%")
+
+
+def save_raw_telemetry(
+    lang: str,
+    telemetry: dict[str, Any],
+    stamp: str,
+    *,
+    file_name: str,
+    threads: int | None,
+    iterations: int,
+    workers: int,
+) -> Path:
+    """Persist a language's rebased telemetry plus run context to disk."""
+    RAW_DIR.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "lang": lang,
+        "file": file_name,
+        "threads": threads,
+        "iterations": iterations,
+        "workers": workers,
+        **telemetry,
+    }
+    out_path = RAW_DIR / f"{lang}_{stamp}.json"
+    out_path.write_text(json.dumps(payload, indent=2))
+    return out_path
 
 
 def print_cross_language_table(summaries: list[LanguageSummary]) -> None:
@@ -458,10 +484,21 @@ def main() -> None:
     print_cross_language_table(summaries)
 
     if not args.no_telemetry:
+        stamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
         for lang in langs:
             telemetry = telemetry_by_lang.get(lang)
             if telemetry is not None:
                 print_phase_summary(lang, telemetry)
+                out_path = save_raw_telemetry(
+                    lang,
+                    telemetry,
+                    stamp,
+                    file_name=file_path.name,
+                    threads=args.threads,
+                    iterations=args.iterations,
+                    workers=args.workers,
+                )
+                print(f"wrote {out_path.relative_to(REPO_ROOT)}")
 
 
 if __name__ == "__main__":

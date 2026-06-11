@@ -17,8 +17,8 @@ impl DecodeOptions {
 #[wasm_bindgen]
 pub struct Measure {
     name: String,
-    start_ns: u64,
-    duration_ns: u64,
+    start_ms: f64,
+    duration_ms: f64,
 }
 
 #[wasm_bindgen]
@@ -28,21 +28,21 @@ impl Measure {
         self.name.clone()
     }
 
-    #[wasm_bindgen(getter, js_name = startNs)]
-    pub fn start_ns(&self) -> f64 {
-        self.start_ns as f64
+    #[wasm_bindgen(getter, js_name = startMs)]
+    pub fn start_ms(&self) -> f64 {
+        self.start_ms
     }
 
-    #[wasm_bindgen(getter, js_name = durationNs)]
-    pub fn duration_ns(&self) -> f64 {
-        self.duration_ns as f64
+    #[wasm_bindgen(getter, js_name = durationMs)]
+    pub fn duration_ms(&self) -> f64 {
+        self.duration_ms
     }
 }
 
 #[wasm_bindgen]
 pub struct DecodeTelemetry {
-    rust_timebase: u64,
-    total_ns: u64,
+    rust_timebase: f64,
+    total_ms: f64,
     measures: Vec<Measure>,
 }
 
@@ -50,12 +50,12 @@ pub struct DecodeTelemetry {
 impl DecodeTelemetry {
     #[wasm_bindgen(getter, js_name = rustTimebase)]
     pub fn rust_timebase(&self) -> f64 {
-        self.rust_timebase as f64
+        self.rust_timebase
     }
 
-    #[wasm_bindgen(getter, js_name = totalNs)]
-    pub fn total_ns(&self) -> f64 {
-        self.total_ns as f64
+    #[wasm_bindgen(getter, js_name = totalMs)]
+    pub fn total_ms(&self) -> f64 {
+        self.total_ms
     }
 
     #[wasm_bindgen(getter)]
@@ -64,8 +64,8 @@ impl DecodeTelemetry {
             .iter()
             .map(|measure| Measure {
                 name: measure.name.clone(),
-                start_ns: measure.start_ns,
-                duration_ns: measure.duration_ns,
+                start_ms: measure.start_ms,
+                duration_ms: measure.duration_ms,
             })
             .collect()
     }
@@ -88,14 +88,14 @@ impl JxlitMeta {
     pub fn telemetry(&self) -> Option<DecodeTelemetry> {
         self.telemetry.as_ref().map(|telemetry| DecodeTelemetry {
             rust_timebase: telemetry.rust_timebase,
-            total_ns: telemetry.total_ns,
+            total_ms: telemetry.total_ms,
             measures: telemetry
                 .measures
                 .iter()
                 .map(|measure| Measure {
                     name: measure.name.clone(),
-                    start_ns: measure.start_ns,
-                    duration_ns: measure.duration_ns,
+                    start_ms: measure.start_ms,
+                    duration_ms: measure.duration_ms,
                 })
                 .collect(),
         })
@@ -115,14 +115,14 @@ impl DecodeMetadata {
             version: self.jxlit.version.clone(),
             telemetry: self.jxlit.telemetry.as_ref().map(|telemetry| DecodeTelemetry {
                 rust_timebase: telemetry.rust_timebase,
-                total_ns: telemetry.total_ns,
+                total_ms: telemetry.total_ms,
                 measures: telemetry
                     .measures
                     .iter()
                     .map(|measure| Measure {
                         name: measure.name.clone(),
-                        start_ns: measure.start_ns,
-                        duration_ns: measure.duration_ns,
+                        start_ms: measure.start_ms,
+                        duration_ms: measure.duration_ms,
                     })
                     .collect(),
             }),
@@ -173,14 +173,14 @@ impl DecodedImage {
                     .as_ref()
                     .map(|telemetry| DecodeTelemetry {
                         rust_timebase: telemetry.rust_timebase,
-                        total_ns: telemetry.total_ns,
+                        total_ms: telemetry.total_ms,
                         measures: telemetry
                             .measures
                             .iter()
                             .map(|measure| Measure {
                                 name: measure.name.clone(),
-                                start_ns: measure.start_ns,
-                                duration_ns: measure.duration_ns,
+                                start_ms: measure.start_ms,
+                                duration_ms: measure.duration_ms,
                             })
                             .collect(),
                     }),
@@ -192,15 +192,15 @@ impl DecodedImage {
 fn measure_from_rust(measure: &jxlit::Measure) -> Measure {
     Measure {
         name: measure.name.to_string(),
-        start_ns: measure.start_ns,
-        duration_ns: measure.duration_ns,
+        start_ms: measure.start_ms,
+        duration_ms: measure.duration_ms,
     }
 }
 
 fn telemetry_from_rust(telemetry: &jxlit::DecodeTelemetry) -> DecodeTelemetry {
     DecodeTelemetry {
         rust_timebase: telemetry.rust_timebase,
-        total_ns: telemetry.total_ns,
+        total_ms: telemetry.total_ms,
         measures: telemetry
             .measures
             .iter()

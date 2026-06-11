@@ -5,7 +5,7 @@ import {
 
 import {
   rebaseTelemetry,
-  unixTimeNs,
+  unixTimeMs,
   type DecodeTelemetry,
   type Measure,
   type NativeDecodeTelemetry,
@@ -58,7 +58,7 @@ function rebaseMetadata(
     };
   },
   timebase: number,
-  wallNs: number,
+  wallMs: number,
 ): DecodeMetadata {
   const nativeTelemetry = metadata._jxlit.telemetry;
   if (nativeTelemetry === undefined) {
@@ -67,7 +67,7 @@ function rebaseMetadata(
   const telemetry = rebaseTelemetry(
     nativeTelemetry,
     timebase,
-    wallNs,
+    wallMs,
     "wasm_decode",
   );
   return {
@@ -97,20 +97,18 @@ export function decode(
           options.telemetry ?? false,
         );
 
-  const timebase = telemetry ? unixTimeNs() : 0;
+  const timebase = telemetry ? unixTimeMs() : 0;
   const start = telemetry ? performance.now() : 0;
 
   const decoded = decodeNative(input, nativeOptions);
-  const wallNs = telemetry
-    ? Math.trunc((performance.now() - start) * 1_000_000)
-    : 0;
+  const wallMs = telemetry ? performance.now() - start : 0;
 
   const height = decoded.height;
   const width = decoded.width;
   const channels = decoded.channels;
   const pixels = new Float32Array(decoded.pixels);
   const metadata = telemetry
-    ? rebaseMetadata(decoded.metadata, timebase, wallNs)
+    ? rebaseMetadata(decoded.metadata, timebase, wallMs)
     : metadataFromNative(decoded.metadata);
 
   decoded.free();

@@ -5,7 +5,7 @@ import { decode as decodeNative } from "../binding.js";
 import type { DecodeMetadata as DecodeMetadataNative } from "../binding.js";
 import {
   rebaseTelemetry,
-  unixTimeNs,
+  unixTimeMs,
   type DecodeTelemetry,
   type Measure,
   type NativeDecodeTelemetry,
@@ -47,7 +47,7 @@ function metadataFromNative(metadata: DecodeMetadataNative): DecodeMetadata {
 function rebaseMetadata(
   metadata: DecodeMetadataNative,
   timebase: number,
-  wallNs: number,
+  wallMs: number,
 ): DecodeMetadata {
   const nativeTelemetry = metadata._jxlit.telemetry as NativeDecodeTelemetry | undefined;
   if (nativeTelemetry === undefined) {
@@ -56,7 +56,7 @@ function rebaseMetadata(
   const telemetry = rebaseTelemetry(
     nativeTelemetry,
     timebase,
-    wallNs,
+    wallMs,
     "node_decode",
   );
   return {
@@ -75,18 +75,20 @@ function rebaseMetadata(
  */
 export function decode(input: Buffer, options?: DecodeOptions): DecodedImage {
   const telemetry = options?.telemetry === true;
-  const timebase = telemetry ? unixTimeNs() : 0;
+  const timebase = telemetry ? unixTimeMs() : 0;
   const start = telemetry ? hrtime.bigint() : 0n;
 
   const decoded = decodeNative(input, options);
-  const wallNs = telemetry ? hrtime.bigint() - start : 0n;
+  const wallMs = telemetry
+    ? Number(hrtime.bigint() - start) / 1_000_000
+    : 0;
 
   const pixels = np
     .array(decoded.pixels, "float32")
     .reshape(decoded.height, decoded.width, decoded.channels);
 
   const metadata = telemetry
-    ? rebaseMetadata(decoded.metadata, timebase, Number(wallNs))
+    ? rebaseMetadata(decoded.metadata, timebase, wallMs)
     : metadataFromNative(decoded.metadata);
 
   return {

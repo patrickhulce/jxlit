@@ -43,7 +43,7 @@ def test_decode_telemetry_collects_measures() -> None:
     telemetry = decoded.metadata["_jxlit"].telemetry
     assert telemetry is not None
     assert telemetry.timebase > 0
-    assert telemetry.total_ns > 0
+    assert telemetry.total_ms > 0
     assert telemetry.measures
     names = {measure.name for measure in telemetry.measures}
     assert "python_decode" in names
@@ -52,11 +52,11 @@ def test_decode_telemetry_collects_measures() -> None:
     assert "render" in names
 
     outer = next(m for m in telemetry.measures if m.name == "python_decode")
-    assert outer.start_ns == 0
-    assert outer.duration_ns == telemetry.total_ns
+    assert outer.start_ms == 0
+    assert outer.duration_ms == telemetry.total_ms
 
     inner_decode = next(m for m in telemetry.measures if m.name == "decode")
-    assert inner_decode.start_ns > 0
+    assert inner_decode.start_ms > 0
 
 
 def test_decode_rejects_non_bytes_like() -> None:

@@ -22,8 +22,10 @@ use crate::vendor::jxl_render::{
     RenderCache, RenderContext, Result,
 };
 
+use crate::pipeline::process::interleave::{SpotColor, run_interleave};
 use crate::pipeline::structs::container::ContainerCtx;
 use crate::pipeline::{decode, parse, process, render};
+use crate::types::DecodeMetadata;
 use crate::{DecodeError, DecodedImage};
 
 /// A rendered keyframe in planar form, plus the metadata needed to interleave.
@@ -78,7 +80,128 @@ pub fn render_frame(
         render_spot_color: !metadata.grayscale(),
     };
 
-    process::interleave::build_decoded_image(&rendered)
+    build_decoded_image(&rendered)
+}
+
+/// Computes the output layout, selects the color/black/alpha/spot channels,
+/// allocates the HWC buffer, and runs the interleave transform
+/// ([`run_interleave`]), wrapping the result into a [`DecodedImage`].
+fn build_decoded_image(rendered: &RenderedFrame) -> std::result::Result<DecodedImage, DecodeError> {
+    let _build_decoded_image = crate::phase_guard!("build_decoded_image");
+    let orientation = rendered.orientation;
+    debug_assert!((1..=8).contains(&orientation));
+
+    let Region {
+        left,
+        top,
+        mut width,
+        mut height,
+    } = rendered.target_frame_region;
+    if orientation >= 5 {
+        std::mem::swap(&mut width, &mut height);
+    }
+
+    let image = &rendered.image;
+    let fb = image.buffer();
+    let color_channels = image.color_channels();
+    let regions_and_shifts = image.regions_and_shifts();
+
+    let mut grids: Vec<&ImageBuffer> = fb[..color_channels].iter().collect();
+    let mut bit_depth = vec![rendered.color_bit_depth; grids.len()];
+    let mut start_offset_xy: Vec<(i32, i32)> = Vec::new();
+    for (region, _) in &regions_and_shifts[..color_channels] {
+        start_offset_xy.push((left - region.left, top - region.top));
+    }
+
+    // Black channel (CMYK only).
+    if rendered.is_cmyk {
+        for (ec_idx, (ec, (region, _))) in rendered
+            .extra_channels
+            .iter()
+            .zip(&regions_and_shifts[color_channels..])
+            .enumerate()
+        {
+            if matches!(ec.0, ExtraChannelType::Black) {
+                grids.push(&fb[color_channels + ec_idx]);
+                bit_depth.push(ec.1);
+                start_offset_xy.push((left - region.left, top - region.top));
+                break;
+            }
+        }
+    }
+
+    // Alpha channel (the `stream()` variant includes alpha).
+    for (ec_idx, (ec, (region, _))) in rendered
+        .extra_channels
+        .iter()
+        .zip(&regions_and_shifts[color_channels..])
+        .enumerate()
+    {
+        if matches!(ec.0, ExtraChannelType::Alpha { .. }) {
+            grids.push(&fb[color_channels + ec_idx]);
+            bit_depth.push(ec.1);
+            start_offset_xy.push((left - region.left, top - region.top));
+            break;
+        }
+    }
+
+    // Spot colors (only mixed into RGB color channels).
+    let mut spot_colors = Vec::new();
+    if rendered.render_spot_color && color_channels == 3 {
+        for (ec_idx, (ec, (region, _))) in rendered
+            .extra_channels
+            .iter()
+            .zip(&regions_and_shifts[color_channels..])
+            .enumerate()
+        {
+            if let ExtraChannelType::SpotColour {
+                red,
+                green,
+                blue,
+                solidity,
+            } = ec.0
+            {
+                spot_colors.push(SpotColor {
+                    grid: &fb[color_channels + ec_idx],
+                    start_offset_xy: (left - region.left, top - region.top),
+                    bit_depth: ec.1,
+                    rgb: (red, green, blue),
+                    solidity,
+                });
+            }
+        }
+    }
+
+    let channels = grids.len();
+    let width_us = width as usize;
+    let height_us = height as usize;
+    let mut pixels = vec![0.0f32; width_us * height_us * channels];
+
+    let count = run_interleave(
+        &mut pixels,
+        &grids,
+        &bit_depth,
+        &start_offset_xy,
+        &spot_colors,
+        orientation,
+        width,
+        height,
+    );
+
+    if count != pixels.len() {
+        return Err(DecodeError::new(format!(
+            "expected to write {} samples, wrote {count}",
+            pixels.len()
+        )));
+    }
+
+    Ok(DecodedImage {
+        height: height_us,
+        width: width_us,
+        channels,
+        pixels,
+        metadata: DecodeMetadata::with_version(env!("CARGO_PKG_VERSION")),
+    })
 }
 
 /// Decodes the keyframe to a blended, color-transformed planar image. Forks

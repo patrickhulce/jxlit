@@ -1,4 +1,4 @@
-.PHONY: all build lint lint-fix typecheck test format benchmark \
+.PHONY: all build lint lint-fix typecheck test format benchmark trace \
         build-rust build-python build-node build-wasm build-bench-rust build-bench-python \
         lint-rust lint-python lint-node lint-wasm \
         lint-fix-rust lint-fix-python lint-fix-node lint-fix-wasm \
@@ -121,3 +121,6 @@ benchmark-node: build-node
 
 benchmark-wasm: build-wasm
 	python3 scripts/benchmark.py $(BENCHMARK_ARGS) --langs wasm
+
+trace:
+	python3 scripts/trace.py

@@ -18,11 +18,12 @@ struct Options {
     no_telemetry: bool,
 }
 
-fn unix_time_ns() -> u64 {
+fn unix_time_ms() -> f64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
-        .as_nanos() as u64
+        .as_secs_f64()
+        * 1000.0
 }
 
 fn parse_args() -> Options {
@@ -135,22 +136,25 @@ fn print_phase_summary(telemetry: &RebasingTelemetry, lang: &str, top_n: usize) 
         .measures
         .iter()
         .find(|measure| measure.name.ends_with("_decode"));
-    let total_ns = outer.map(|m| m.duration_ns).unwrap_or(telemetry.total_ns);
+    let total_ms = outer.map(|m| m.duration_ms).unwrap_or(telemetry.total_ms);
     let mut ranked: Vec<_> = telemetry.measures.iter().collect();
-    ranked.sort_by_key(|measure| std::cmp::Reverse(measure.duration_ns));
+    ranked.sort_by(|a, b| {
+        b.duration_ms
+            .partial_cmp(&a.duration_ms)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     ranked.truncate(top_n);
 
     eprintln!("\n== phase breakdown ({lang}) ==");
     for measure in ranked {
-        let ms = measure.duration_ns as f64 / 1_000_000.0;
-        let pct = if total_ns > 0 {
-            100.0 * measure.duration_ns as f64 / total_ns as f64
+        let pct = if total_ms > 0.0 {
+            100.0 * measure.duration_ms / total_ms
         } else {
             0.0
         };
         eprintln!(
             "{:<16} {:>8.2}ms {:>6.1}%",
-            measure.name, ms, pct
+            measure.name, measure.duration_ms, pct
         );
     }
 }
@@ -165,17 +169,17 @@ fn telemetry_to_json(telemetry: &RebasingTelemetry) -> String {
         .iter()
         .map(|measure| {
             format!(
-                "{{\"name\":\"{}\",\"start_ns\":{},\"duration_ns\":{}}}",
+                "{{\"name\":\"{}\",\"start_ms\":{:.6},\"duration_ms\":{:.6}}}",
                 json_escape(&measure.name),
-                measure.start_ns,
-                measure.duration_ns
+                measure.start_ms,
+                measure.duration_ms
             )
         })
         .collect();
     format!(
-        "{{\"timebase\":{},\"total_ns\":{},\"measures\":[{}]}}",
+        "{{\"timebase\":{:.6},\"total_ms\":{:.6},\"measures\":[{}]}}",
         telemetry.timebase,
-        telemetry.total_ns,
+        telemetry.total_ms,
         measures.join(",")
     )
 }
@@ -240,14 +244,14 @@ fn main() {
             threads: options.threads,
             telemetry: true,
         };
-        let timebase = unix_time_ns();
+        let timebase = unix_time_ms();
         let wall_start = Instant::now();
         let telemetry_decode =
             decode_with_options(&bytes, &telemetry_options).unwrap_or_else(|e| {
                 eprintln!("telemetry decode failed: {e}");
                 process::exit(1);
             });
-        let wall_ns = wall_start.elapsed().as_nanos() as u64;
+        let wall_ms = wall_start.elapsed().as_secs_f64() * 1000.0;
         let native = telemetry_decode
             .metadata
             .jxlit
@@ -255,7 +259,7 @@ fn main() {
             .as_ref()
             .expect("telemetry decode must return telemetry");
         std::hint::black_box(&telemetry_decode);
-        let rebased = rebase_telemetry(native, timebase, "rust_decode", wall_ns);
+        let rebased = rebase_telemetry(native, timebase, "rust_decode", wall_ms);
         print_phase_summary(&rebased, "rust", 10);
         format!(",\"telemetry\":{}", telemetry_to_json(&rebased))
     };

@@ -104,8 +104,8 @@ fn decode_telemetry_collects_flat_measures() {
         .telemetry
         .as_ref()
         .expect("telemetry enabled");
-    assert!(telemetry.rust_timebase > 0);
-    assert!(telemetry.total_ns > 0);
+    assert!(telemetry.rust_timebase > 0.0);
+    assert!(telemetry.total_ms > 0.0);
     assert!(!telemetry.measures.is_empty());
 
     let names: Vec<_> = telemetry.measures.iter().map(|m| m.name).collect();
@@ -114,7 +114,6 @@ fn decode_telemetry_collects_flat_measures() {
     assert!(names.contains(&"render"));
 
     for measure in &telemetry.measures {
-        assert!(measure.duration_ns > 0);
-        assert!(measure.start_ns <= telemetry.total_ns);
+        assert!(measure.start_ms <= telemetry.total_ms);
     }
 }

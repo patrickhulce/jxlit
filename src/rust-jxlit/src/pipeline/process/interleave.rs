@@ -1,156 +1,31 @@
-//! Interleave post-decode step: planar [`RenderedFrame`] -> interleaved (HWC)
-//! `f32` buffer.
+//! Interleave transform: planar channel grids -> interleaved (HWC) `f32` buffer.
 //!
-//! `run_interleave` is the transform: it selects color channels, then the black
-//! channel (for CMYK), then alpha, applies spot-color mixing, and maps
-//! coordinates through the image orientation, writing samples into an HWC `f32`
-//! buffer. `build_decoded_image` computes the output layout, allocates the
-//! buffer, runs the transform and wraps the result into a [`DecodedImage`].
+//! [`run_interleave`] is the transform: it samples the channel grids chosen by
+//! [`build_decoded_image`](crate::pipeline::render::frame::build_decoded_image)
+//! (color, then the black channel for CMYK, then alpha), applies spot-color
+//! mixing, maps coordinates through the image orientation, and writes samples
+//! into an HWC `f32` buffer.
 //!
 //! Direct port of `jxl-oxide`'s `ImageStream` (`from_render` +
 //! `write_to_buffer::<f32>`).
 
-use jxl_image::{BitDepth, ExtraChannelType};
+use jxl_image::BitDepth;
 
-use crate::vendor::jxl_render::{ImageBuffer, Region};
+use crate::vendor::jxl_render::ImageBuffer;
 
-use crate::pipeline::render::frame::RenderedFrame;
-use crate::types::DecodeMetadata;
-use crate::{DecodeError, DecodedImage};
-
-struct SpotColor<'r> {
-    grid: &'r ImageBuffer,
-    start_offset_xy: (i32, i32),
-    bit_depth: BitDepth,
-    rgb: (f32, f32, f32),
-    solidity: f32,
-}
-
-/// Computes the output layout, allocates the HWC buffer, runs [`run_interleave`]
-/// and wraps the result into a [`DecodedImage`].
-pub fn build_decoded_image(rendered: &RenderedFrame) -> Result<DecodedImage, DecodeError> {
-    let _interleave = crate::phase_guard!("interleave");
-    let orientation = rendered.orientation;
-    debug_assert!((1..=8).contains(&orientation));
-
-    let Region {
-        left,
-        top,
-        mut width,
-        mut height,
-    } = rendered.target_frame_region;
-    if orientation >= 5 {
-        std::mem::swap(&mut width, &mut height);
-    }
-
-    let image = &rendered.image;
-    let fb = image.buffer();
-    let color_channels = image.color_channels();
-    let regions_and_shifts = image.regions_and_shifts();
-
-    let mut grids: Vec<&ImageBuffer> = fb[..color_channels].iter().collect();
-    let mut bit_depth = vec![rendered.color_bit_depth; grids.len()];
-    let mut start_offset_xy: Vec<(i32, i32)> = Vec::new();
-    for (region, _) in &regions_and_shifts[..color_channels] {
-        start_offset_xy.push((left - region.left, top - region.top));
-    }
-
-    // Black channel (CMYK only).
-    if rendered.is_cmyk {
-        for (ec_idx, (ec, (region, _))) in rendered
-            .extra_channels
-            .iter()
-            .zip(&regions_and_shifts[color_channels..])
-            .enumerate()
-        {
-            if matches!(ec.0, ExtraChannelType::Black) {
-                grids.push(&fb[color_channels + ec_idx]);
-                bit_depth.push(ec.1);
-                start_offset_xy.push((left - region.left, top - region.top));
-                break;
-            }
-        }
-    }
-
-    // Alpha channel (the `stream()` variant includes alpha).
-    for (ec_idx, (ec, (region, _))) in rendered
-        .extra_channels
-        .iter()
-        .zip(&regions_and_shifts[color_channels..])
-        .enumerate()
-    {
-        if matches!(ec.0, ExtraChannelType::Alpha { .. }) {
-            grids.push(&fb[color_channels + ec_idx]);
-            bit_depth.push(ec.1);
-            start_offset_xy.push((left - region.left, top - region.top));
-            break;
-        }
-    }
-
-    // Spot colors (only mixed into RGB color channels).
-    let mut spot_colors = Vec::new();
-    if rendered.render_spot_color && color_channels == 3 {
-        for (ec_idx, (ec, (region, _))) in rendered
-            .extra_channels
-            .iter()
-            .zip(&regions_and_shifts[color_channels..])
-            .enumerate()
-        {
-            if let ExtraChannelType::SpotColour {
-                red,
-                green,
-                blue,
-                solidity,
-            } = ec.0
-            {
-                spot_colors.push(SpotColor {
-                    grid: &fb[color_channels + ec_idx],
-                    start_offset_xy: (left - region.left, top - region.top),
-                    bit_depth: ec.1,
-                    rgb: (red, green, blue),
-                    solidity,
-                });
-            }
-        }
-    }
-
-    let channels = grids.len();
-    let width_us = width as usize;
-    let height_us = height as usize;
-    let mut pixels = vec![0.0f32; width_us * height_us * channels];
-
-    let count = run_interleave(
-        &mut pixels,
-        &grids,
-        &bit_depth,
-        &start_offset_xy,
-        &spot_colors,
-        orientation,
-        width,
-        height,
-    );
-
-    if count != pixels.len() {
-        return Err(DecodeError::new(format!(
-            "expected to write {} samples, wrote {count}",
-            pixels.len()
-        )));
-    }
-
-    Ok(DecodedImage {
-        height: height_us,
-        width: width_us,
-        channels,
-        pixels,
-        metadata: DecodeMetadata::with_version(env!("CARGO_PKG_VERSION")),
-    })
+pub(crate) struct SpotColor<'r> {
+    pub grid: &'r ImageBuffer,
+    pub start_offset_xy: (i32, i32),
+    pub bit_depth: BitDepth,
+    pub rgb: (f32, f32, f32),
+    pub solidity: f32,
 }
 
 /// Writes the interleaved (HWC) samples into `pixels`, returning the number of
 /// samples written. The output layout and channel selection are decided by
-/// [`build_decoded_image`].
+/// [`build_decoded_image`](crate::pipeline::render::frame::build_decoded_image).
 #[allow(clippy::too_many_arguments)]
-fn run_interleave(
+pub(crate) fn run_interleave(
     pixels: &mut [f32],
     grids: &[&ImageBuffer],
     bit_depth: &[BitDepth],
@@ -160,6 +35,7 @@ fn run_interleave(
     width: u32,
     height: u32,
 ) -> usize {
+    let _run_interleave = crate::phase_guard!("run_interleave");
     let width_us = width as usize;
     let channels = grids.len();
 

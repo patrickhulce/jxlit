@@ -1,53 +1,52 @@
 export interface Measure {
   name: string;
-  startNs: number;
-  durationNs: number;
+  startMs: number;
+  durationMs: number;
 }
 
 export interface NativeDecodeTelemetry {
   rustTimebase: number;
-  totalNs: number;
+  totalMs: number;
   measures: Measure[];
 }
 
 export interface DecodeTelemetry {
   timebase: number;
-  totalNs: number;
+  totalMs: number;
   measures: Measure[];
 }
 
-export function unixTimeNs(): number {
-  const millis = Date.now();
-  return Math.trunc(millis * 1_000_000);
+export function unixTimeMs(): number {
+  return Date.now();
 }
 
 export function rebaseTelemetry(
   native: NativeDecodeTelemetry,
   timebase: number,
-  wallNs: number,
+  wallMs: number,
   outerName: string,
 ): DecodeTelemetry {
   const delta = native.rustTimebase - timebase;
   const shifted = native.measures.map((measure) => ({
     name: measure.name,
-    startNs: measure.startNs + delta,
-    durationNs: measure.durationNs,
+    startMs: measure.startMs + delta,
+    durationMs: measure.durationMs,
   }));
   return {
     timebase,
-    totalNs: wallNs,
-    measures: [{ name: outerName, startNs: 0, durationNs: wallNs }, ...shifted],
+    totalMs: wallMs,
+    measures: [{ name: outerName, startMs: 0, durationMs: wallMs }, ...shifted],
   };
 }
 
 export function telemetryToJson(telemetry: DecodeTelemetry): Record<string, unknown> {
   return {
     timebase: telemetry.timebase,
-    total_ns: telemetry.totalNs,
+    total_ms: telemetry.totalMs,
     measures: telemetry.measures.map((measure) => ({
       name: measure.name,
-      start_ns: measure.startNs,
-      duration_ns: measure.durationNs,
+      start_ms: measure.startMs,
+      duration_ms: measure.durationMs,
     })),
   };
 }
@@ -58,14 +57,13 @@ export function printPhaseSummary(
   topN = 10,
 ): void {
   const outer = telemetry.measures.find((measure) => measure.name.endsWith("_decode"));
-  const totalNs = outer?.durationNs ?? telemetry.totalNs;
+  const totalMs = outer?.durationMs ?? telemetry.totalMs;
   const ranked = [...telemetry.measures]
-    .sort((a, b) => b.durationNs - a.durationNs)
+    .sort((a, b) => b.durationMs - a.durationMs)
     .slice(0, topN);
   console.error(`\n== phase breakdown (${lang}) ==`);
   for (const measure of ranked) {
-    const ms = measure.durationNs / 1_000_000;
-    const pct = totalNs > 0 ? (100 * measure.durationNs) / totalNs : 0;
-    console.error(`${measure.name.padEnd(16)} ${ms.toFixed(2).padStart(8)}ms ${pct.toFixed(1).padStart(6)}%`);
+    const pct = totalMs > 0 ? (100 * measure.durationMs) / totalMs : 0;
+    console.error(`${measure.name.padEnd(16)} ${measure.durationMs.toFixed(2).padStart(8)}ms ${pct.toFixed(1).padStart(6)}%`);
   }
 }

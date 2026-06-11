@@ -4,18 +4,19 @@ use web_time::Instant;
 
 use crate::types::{DecodeTelemetry, Measure};
 
-/// Unix-epoch nanoseconds (wall clock).
-pub(crate) fn unix_time_ns() -> u64 {
+/// Unix-epoch milliseconds (wall clock).
+pub(crate) fn unix_time_ms() -> f64 {
     #[cfg(target_arch = "wasm32")]
     {
-        (js_sys::Date::now() * 1_000_000.0) as u64
+        js_sys::Date::now()
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
-            .as_nanos() as u64
+            .as_secs_f64()
+            * 1000.0
     }
 }
 
@@ -51,8 +52,8 @@ mod storage {
         {
             collector.measures.push(Measure {
                 name,
-                start_ns: start.duration_since(epoch).as_nanos() as u64,
-                duration_ns: start.elapsed().as_nanos() as u64,
+                start_ms: start.duration_since(epoch).as_secs_f64() * 1000.0,
+                duration_ms: start.elapsed().as_secs_f64() * 1000.0,
             });
         }
     }
@@ -102,8 +103,8 @@ mod storage {
             };
             collector.measures.push(Measure {
                 name,
-                start_ns: start.duration_since(epoch).as_nanos() as u64,
-                duration_ns: start.elapsed().as_nanos() as u64,
+                start_ms: start.duration_since(epoch).as_secs_f64() * 1000.0,
+                duration_ms: start.elapsed().as_secs_f64() * 1000.0,
             });
         });
     }
@@ -144,7 +145,7 @@ pub fn with_timing_subscriber<T, F>(f: F) -> (T, DecodeTelemetry)
 where
     F: FnOnce() -> T,
 {
-    let rust_timebase = unix_time_ns();
+    let rust_timebase = unix_time_ms();
     storage::set(Some(MeasureCollector {
         epoch: Instant::now(),
         measures: Vec::new(),
@@ -157,7 +158,7 @@ where
 
     let telemetry = DecodeTelemetry {
         rust_timebase,
-        total_ns: collector.epoch.elapsed().as_nanos() as u64,
+        total_ms: collector.epoch.elapsed().as_secs_f64() * 1000.0,
         measures: collector.measures,
     };
 
@@ -165,45 +166,45 @@ where
 }
 
 /// Consumer-facing telemetry after rebasing to an outer `<lang>_decode` origin.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct RebasingTelemetry {
-    pub timebase: u64,
-    pub total_ns: u64,
+    pub timebase: f64,
+    pub total_ms: f64,
     pub measures: Vec<RebasedMeasure>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct RebasedMeasure {
     pub name: String,
-    pub start_ns: u64,
-    pub duration_ns: u64,
+    pub start_ms: f64,
+    pub duration_ms: f64,
 }
 
 /// Rebases Rust-internal measures to a binding wall-clock origin and prepends
-/// `<lang>_decode` at `start_ns: 0`.
+/// `<lang>_decode` at `start_ms: 0`.
 pub fn rebase_telemetry(
     native: &DecodeTelemetry,
-    timebase: u64,
+    timebase: f64,
     outer_name: &str,
-    outer_duration_ns: u64,
+    outer_duration_ms: f64,
 ) -> RebasingTelemetry {
-    let delta = native.rust_timebase.saturating_sub(timebase);
+    let delta = (native.rust_timebase - timebase).max(0.0);
     let mut measures = Vec::with_capacity(native.measures.len() + 1);
     measures.push(RebasedMeasure {
         name: outer_name.to_string(),
-        start_ns: 0,
-        duration_ns: outer_duration_ns,
+        start_ms: 0.0,
+        duration_ms: outer_duration_ms,
     });
     for measure in &native.measures {
         measures.push(RebasedMeasure {
             name: measure.name.to_string(),
-            start_ns: measure.start_ns.saturating_add(delta),
-            duration_ns: measure.duration_ns,
+            start_ms: (measure.start_ms + delta).max(0.0),
+            duration_ms: measure.duration_ms,
         });
     }
     RebasingTelemetry {
         timebase,
-        total_ns: outer_duration_ns,
+        total_ms: outer_duration_ms,
         measures,
     }
 }
@@ -227,15 +228,13 @@ mod tests {
             let _inner = crate::phase_guard!("inner");
         });
 
-        assert!(telemetry.rust_timebase > 0);
-        assert!(telemetry.total_ns > 0);
+        assert!(telemetry.rust_timebase > 0.0);
         assert_eq!(telemetry.measures.len(), 2);
         assert_eq!(telemetry.measures[0].name, "inner");
         assert_eq!(telemetry.measures[1].name, "outer");
-        assert!(telemetry.measures[0].duration_ns > 0);
-        assert!(telemetry.measures[1].duration_ns >= telemetry.measures[0].duration_ns);
+        assert!(telemetry.measures[1].duration_ms >= telemetry.measures[0].duration_ms);
         for measure in &telemetry.measures {
-            assert!(measure.start_ns <= telemetry.total_ns);
+            assert!(measure.start_ms <= telemetry.total_ms);
         }
     }
 }

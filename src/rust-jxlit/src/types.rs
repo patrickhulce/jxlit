@@ -14,34 +14,34 @@ pub struct DecodeOptions {
 }
 
 /// A single flat phase timing measure.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Measure {
     pub name: &'static str,
-    pub start_ns: u64,
-    pub duration_ns: u64,
+    pub start_ms: f64,
+    pub duration_ms: f64,
 }
 
 /// Collected decode phase timings from the Rust core (monotonic timeline).
 ///
 /// Bindings rebase measures against an outer `<lang>_decode` wall-clock origin
-/// and expose consumer-facing `{ timebase, total_ns, measures }`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// and expose consumer-facing `{ timebase, total_ms, measures }`.
+#[derive(Debug, Clone, PartialEq)]
 pub struct DecodeTelemetry {
-    /// Unix-epoch nanoseconds at Rust decode-session start (for rebase delta).
-    pub rust_timebase: u64,
-    pub total_ns: u64,
+    /// Unix-epoch milliseconds at Rust decode-session start (for rebase delta).
+    pub rust_timebase: f64,
+    pub total_ms: f64,
     pub measures: Vec<Measure>,
 }
 
 /// Library-specific metadata returned on every decode.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct JxlitMeta {
     pub version: &'static str,
     pub telemetry: Option<DecodeTelemetry>,
 }
 
 /// Decode result metadata. Exposed as `_jxlit` in language bindings.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct DecodeMetadata {
     pub jxlit: JxlitMeta,
 }

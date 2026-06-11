@@ -24,14 +24,14 @@ class DecodeOptions:
 @dataclass(frozen=True)
 class Measure:
     name: str
-    start_ns: int
-    duration_ns: int
+    start_ms: float
+    duration_ms: float
 
 
 @dataclass(frozen=True)
 class DecodeTelemetry:
-    timebase: int
-    total_ns: int
+    timebase: float
+    total_ms: float
     measures: list[Measure]
 
 
@@ -55,50 +55,50 @@ class DecodedImage:
 def _rebase_telemetry(
     native: object,
     *,
-    timebase: int,
-    wall_ns: int,
+    timebase: float,
+    wall_ms: float,
     outer_name: str,
 ) -> DecodeTelemetry:
-    delta = int(native.rust_timebase) - timebase  # type: ignore[attr-defined]
+    delta = float(native.rust_timebase) - timebase  # type: ignore[attr-defined]
     shifted = [
         Measure(
-            name=str(measure.name),  # type: ignore[attr-defined]
-            start_ns=int(measure.start_ns) + delta,  # type: ignore[attr-defined]
-            duration_ns=int(measure.duration_ns),  # type: ignore[attr-defined]
+            name=str(measure.name),
+            start_ms=float(measure.start_ms) + delta,
+            duration_ms=float(measure.duration_ms),
         )
         for measure in native.measures  # type: ignore[attr-defined]
     ]
     return DecodeTelemetry(
         timebase=timebase,
-        total_ns=wall_ns,
-        measures=[Measure(outer_name, 0, wall_ns), *shifted],
+        total_ms=wall_ms,
+        measures=[Measure(outer_name, 0.0, wall_ms), *shifted],
     )
 
 
 def _telemetry_from_native(
     telemetry: object | None,
     *,
-    timebase: int | None = None,
-    wall_ns: int | None = None,
+    timebase: float | None = None,
+    wall_ms: float | None = None,
     outer_name: str = "python_decode",
 ) -> DecodeTelemetry | None:
     if telemetry is None:
         return None
-    if timebase is not None and wall_ns is not None:
+    if timebase is not None and wall_ms is not None:
         return _rebase_telemetry(
             telemetry,
             timebase=timebase,
-            wall_ns=wall_ns,
+            wall_ms=wall_ms,
             outer_name=outer_name,
         )
     return DecodeTelemetry(
-        timebase=int(telemetry.rust_timebase),  # type: ignore[attr-defined]
-        total_ns=int(telemetry.total_ns),  # type: ignore[attr-defined]
+        timebase=float(telemetry.rust_timebase),  # type: ignore[attr-defined]
+        total_ms=float(telemetry.total_ms),  # type: ignore[attr-defined]
         measures=[
             Measure(
-                name=str(measure.name),  # type: ignore[attr-defined]
-                start_ns=int(measure.start_ns),  # type: ignore[attr-defined]
-                duration_ns=int(measure.duration_ns),  # type: ignore[attr-defined]
+                name=str(measure.name),
+                start_ms=float(measure.start_ms),
+                duration_ms=float(measure.duration_ms),
             )
             for measure in telemetry.measures  # type: ignore[attr-defined]
         ],
@@ -108,8 +108,8 @@ def _telemetry_from_native(
 def _decoded_image_from_native(
     decoded: _DecodedImageNative,
     *,
-    timebase: int | None = None,
-    wall_ns: int | None = None,
+    timebase: float | None = None,
+    wall_ms: float | None = None,
 ) -> DecodedImage:
     jxlit_meta = decoded.metadata._jxlit
     return DecodedImage(
@@ -123,7 +123,7 @@ def _decoded_image_from_native(
                 telemetry=_telemetry_from_native(
                     jxlit_meta.telemetry,
                     timebase=timebase,
-                    wall_ns=wall_ns,
+                    wall_ms=wall_ms,
                 ),
             )
         },
@@ -152,11 +152,11 @@ def decode(data: bytes, *, options: DecodeOptions | None = None) -> DecodedImage
         )
 
     if telemetry:
-        timebase = time.time_ns()
+        timebase = time.time_ns() / 1_000_000.0
         start = time.perf_counter_ns()
         decoded = _decode_native(bytes(data), options=native_options)
-        wall_ns = time.perf_counter_ns() - start
-        return _decoded_image_from_native(decoded, timebase=timebase, wall_ns=wall_ns)
+        wall_ms = (time.perf_counter_ns() - start) / 1_000_000.0
+        return _decoded_image_from_native(decoded, timebase=timebase, wall_ms=wall_ms)
 
     decoded = _decode_native(bytes(data), options=native_options)
     return _decoded_image_from_native(decoded)
@@ -166,12 +166,12 @@ def telemetry_to_dict(telemetry: DecodeTelemetry) -> dict[str, object]:
     """Serialize rebased telemetry for benchmark JSON output."""
     return {
         "timebase": telemetry.timebase,
-        "total_ns": telemetry.total_ns,
+        "total_ms": telemetry.total_ms,
         "measures": [
             {
                 "name": measure.name,
-                "start_ns": measure.start_ns,
-                "duration_ns": measure.duration_ns,
+                "start_ms": measure.start_ms,
+                "duration_ms": measure.duration_ms,
             }
             for measure in telemetry.measures
         ],
@@ -183,10 +183,9 @@ def print_phase_summary(telemetry: DecodeTelemetry, *, lang: str, top_n: int = 1
     import sys
 
     outer = next((m for m in telemetry.measures if m.name.endswith("_decode")), None)
-    total_ns = outer.duration_ns if outer is not None else telemetry.total_ns
-    ranked = sorted(telemetry.measures, key=lambda m: m.duration_ns, reverse=True)[:top_n]
+    total_ms = outer.duration_ms if outer is not None else telemetry.total_ms
+    ranked = sorted(telemetry.measures, key=lambda m: m.duration_ms, reverse=True)[:top_n]
     print(f"\n== phase breakdown ({lang}) ==", file=sys.stderr)
     for measure in ranked:
-        ms = measure.duration_ns / 1_000_000.0
-        pct = 100.0 * measure.duration_ns / total_ns if total_ns else 0.0
-        print(f"{measure.name:<16} {ms:8.2f}ms {pct:6.1f}%", file=sys.stderr)
+        pct = 100.0 * measure.duration_ms / total_ms if total_ms else 0.0
+        print(f"{measure.name:<16} {measure.duration_ms:8.2f}ms {pct:6.1f}%", file=sys.stderr)

@@ -82,7 +82,7 @@ test("decode telemetry collects measures", () => {
   const telemetry = decoded.metadata._jxlit.telemetry;
   assert.ok(telemetry);
   assert.ok(telemetry.timebase > 0);
-  assert.ok(telemetry.totalNs > 0);
+  assert.ok(telemetry.totalMs > 0);
   assert.ok(telemetry.measures.length > 0);
   const names = new Set(telemetry.measures.map((measure) => measure.name));
   assert.ok(names.has("node_decode"));
@@ -94,12 +94,12 @@ test("decode telemetry collects measures", () => {
     (measure) => measure.name === "node_decode",
   );
   assert.ok(outer);
-  assert.equal(outer.startNs, 0);
-  assert.equal(outer.durationNs, telemetry.totalNs);
+  assert.equal(outer.startMs, 0);
+  assert.equal(outer.durationMs, telemetry.totalMs);
 
   const innerDecode = telemetry.measures.find(
     (measure) => measure.name === "decode",
   );
   assert.ok(innerDecode);
-  assert.ok(innerDecode.startNs > 0);
+  assert.ok(innerDecode.startMs > 0);
 });

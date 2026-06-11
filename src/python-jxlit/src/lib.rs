@@ -26,18 +26,18 @@ struct Measure {
     #[pyo3(get)]
     name: String,
     #[pyo3(get)]
-    start_ns: u64,
+    start_ms: f64,
     #[pyo3(get)]
-    duration_ns: u64,
+    duration_ms: f64,
 }
 
 #[pyclass]
 #[derive(Clone)]
 struct DecodeTelemetry {
     #[pyo3(get)]
-    rust_timebase: u64,
+    rust_timebase: f64,
     #[pyo3(get)]
-    total_ns: u64,
+    total_ms: f64,
     #[pyo3(get)]
     measures: Vec<Measure>,
 }
@@ -92,15 +92,15 @@ fn decode_options_from_py(options: Option<DecodeOptions>) -> jxlit::DecodeOption
 fn measure_from_rust(measure: &jxlit::Measure) -> Measure {
     Measure {
         name: measure.name.to_string(),
-        start_ns: measure.start_ns,
-        duration_ns: measure.duration_ns,
+        start_ms: measure.start_ms,
+        duration_ms: measure.duration_ms,
     }
 }
 
 fn telemetry_from_rust(telemetry: &jxlit::DecodeTelemetry) -> DecodeTelemetry {
     DecodeTelemetry {
         rust_timebase: telemetry.rust_timebase,
-        total_ns: telemetry.total_ns,
+        total_ms: telemetry.total_ms,
         measures: telemetry
             .measures
             .iter()
