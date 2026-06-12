@@ -3,8 +3,8 @@ mod telemetry;
 mod types;
 mod vendor;
 
-pub use telemetry::{RebasedMeasure, RebasingTelemetry, rebase_telemetry};
 pub use crate::pipeline::gpu::GpuPixelBuffer;
+pub use telemetry::{RebasedMeasure, RebasingTelemetry, rebase_telemetry};
 pub use types::{
     DecodeError, DecodeMetadata, DecodeOptions, DecodeTelemetry, DecodedImage, DecodedPixels,
     Destination, Hardware, JxlitMeta, Measure, PixelLayout,

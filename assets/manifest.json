@@ -1,0 +1,44 @@
+{
+  "fixtures": [
+    {
+      "slug": "colors-ACES-RGB_D65_SRG_Rel_Lin",
+      "jxl": "assets/colors-ACES-RGB_D65_SRG_Rel_Lin_e1_d0p5_fd4.jxl",
+      "reference_exr": "assets/colors-ACES-RGB_D65_SRG_Rel_Lin_ref.exr",
+      "ocio_space": "Linear Rec.709 (sRGB)",
+      "encode": {
+        "color_space": "RGB_D65_SRG_Rel_Lin"
+      },
+      "mae_tolerance": 0.03
+    },
+    {
+      "slug": "colors-ACEScct-RGB_D65_SRG_Rel_Lin",
+      "jxl": "assets/colors-ACEScct-RGB_D65_SRG_Rel_Lin_e1_d0p5_fd4.jxl",
+      "reference_exr": "assets/colors-ACEScct-RGB_D65_SRG_Rel_Lin_ref.exr",
+      "ocio_space": "ACEScct",
+      "encode": {
+        "color_space": "RGB_D65_SRG_Rel_Lin"
+      },
+      "mae_tolerance": 0.03
+    },
+    {
+      "slug": "colors-Rec2020-Rec2100PQ",
+      "jxl": "assets/colors-Rec2020-Rec2100PQ_e1_d0p5_fd4.jxl",
+      "reference_exr": "assets/colors-Rec2020-Rec2100PQ_ref.exr",
+      "ocio_space": "Rec.2100-PQ - Display",
+      "encode": {
+        "color_space": "Rec2100PQ"
+      },
+      "mae_tolerance": 0.04
+    },
+    {
+      "slug": "colors-P3-RGB_D65_DCI_Rel_DCI",
+      "jxl": "assets/colors-P3-RGB_D65_DCI_Rel_DCI_e1_d0p5_fd4.jxl",
+      "reference_exr": "assets/colors-P3-RGB_D65_DCI_Rel_DCI_ref.exr",
+      "ocio_space": "P3-D65 - Display",
+      "encode": {
+        "color_space": "RGB_D65_DCI_Rel_DCI"
+      },
+      "mae_tolerance": 0.03
+    }
+  ]
+}

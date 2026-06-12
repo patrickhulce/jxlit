@@ -147,16 +147,15 @@ fn decoded_image_from_rust(
     decoded: jxlit::DecodedImage,
     layout: jxlit::PixelLayout,
 ) -> PyResult<DecodedImage> {
-    let pixels = decoded
-        .pixels
-        .cpu()
-        .ok_or_else(|| PyValueError::new_err("GPU pixel buffers are not supported in Python bindings"))?;
+    let pixels = decoded.pixels.cpu().ok_or_else(|| {
+        PyValueError::new_err("GPU pixel buffers are not supported in Python bindings")
+    })?;
     let shape = match layout {
         jxlit::PixelLayout::Interleaved => (decoded.height, decoded.width, decoded.channels),
         jxlit::PixelLayout::Planar => (decoded.channels, decoded.height, decoded.width),
     };
-    let array = Array3::from_shape_vec(shape, pixels)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let array =
+        Array3::from_shape_vec(shape, pixels).map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(DecodedImage {
         height: decoded.height,
         width: decoded.width,

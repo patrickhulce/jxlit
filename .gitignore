@@ -9,3 +9,5 @@ src/python-jxlit/.venv/
 dist/
 src/node-jxlit/binding.js
 src/node-jxlit/binding.d.ts
+
+assets/master_aces2065.exr

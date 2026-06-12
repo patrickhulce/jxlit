@@ -9,9 +9,9 @@
 
 use std::collections::HashMap;
 
-use crate::types::{DecodeOptions, PixelLayout};
 #[cfg(feature = "gpu")]
 use crate::types::Hardware;
+use crate::types::{DecodeOptions, PixelLayout};
 use crate::vendor::jxl_frame::FrameHeader;
 use crate::vendor::jxl_frame::data::{HfGlobal, LfGlobal, LfGroup};
 use crate::vendor::jxl_render::{IndexedFrame, Reference, Region, RenderContext};

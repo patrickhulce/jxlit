@@ -239,9 +239,9 @@ fn metadata_from_rust(metadata: &jxlit::DecodeMetadata) -> DecodeMetadata {
 }
 
 fn pixels_from_rust(pixels: jxlit::DecodedPixels) -> Result<Vec<f32>, JsError> {
-    pixels.cpu().ok_or_else(|| {
-        JsError::new("GPU pixel buffers are not supported in WASM bindings")
-    })
+    pixels
+        .cpu()
+        .ok_or_else(|| JsError::new("GPU pixel buffers are not supported in WASM bindings"))
 }
 
 #[wasm_bindgen]

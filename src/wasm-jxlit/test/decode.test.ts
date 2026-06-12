@@ -1,12 +1,14 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { spawnSync } from "node:child_process";
 import { test } from "node:test";
 import * as assert from "node:assert/strict";
 import { PNG } from "pngjs";
 
 import { decode } from "../dist/index.js";
 
-const ASSETS_DIR = join(process.cwd(), "../../assets");
+const REPO_ROOT = join(process.cwd(), "../..");
+const ASSETS_DIR = join(REPO_ROOT, "assets");
 const JXL_FIXTURE = join(ASSETS_DIR, "colors_e1_d0p5_fd4.jxl");
 const PNG_FIXTURE = join(ASSETS_DIR, "colors.png");
 const MAE_TOLERANCE = 0.02;
@@ -46,6 +48,92 @@ function meanAbsError(a: Float32Array, b: Float32Array): number {
     total += Math.abs(a[i] - b[i]);
   }
   return total / a.length;
+}
+
+type ManifestFixture = {
+  slug: string;
+  jxl: string;
+  reference_exr: string;
+  mae_tolerance: number;
+};
+
+function parsePfmRgbF32(data: Buffer): {
+  height: number;
+  width: number;
+  pixels: Float32Array;
+} {
+  let offset = 0;
+  const lines: Buffer[] = [];
+  while (lines.length < 3) {
+    const end = data.indexOf("\n", offset, "utf8");
+    lines.push(data.subarray(offset, end));
+    offset = end + 1;
+  }
+
+  assert.equal(lines[0].toString("utf8"), "PF");
+  const [widthText, heightText] = lines[1].toString("utf8").split(/\s+/);
+  const width = Number(widthText);
+  const height = Number(heightText);
+  assert.ok(lines[2].toString("utf8").startsWith("-"));
+
+  const pixels = new Float32Array(
+    data.buffer,
+    data.byteOffset + offset,
+    width * height * 3,
+  );
+  return { height, width, pixels };
+}
+
+function loadReferenceRgbF32(referenceExr: string): {
+  height: number;
+  width: number;
+  channels: number;
+  pixels: Float32Array;
+} {
+  const result = spawnSync(
+    "uv",
+    ["run", "scripts/exr_to_pfm.py", join(REPO_ROOT, referenceExr), "--stdout"],
+    {
+      cwd: REPO_ROOT,
+      encoding: "buffer",
+      maxBuffer: 16 * 1024 * 1024,
+    },
+  );
+  assert.equal(
+    result.status,
+    0,
+    `exr_to_pfm failed: ${result.stderr?.toString("utf8") ?? ""}`,
+  );
+
+  const parsed = parsePfmRgbF32(result.stdout as Buffer);
+  return {
+    height: parsed.height,
+    width: parsed.width,
+    channels: 3,
+    pixels: parsed.pixels,
+  };
+}
+
+const manifest = JSON.parse(
+  readFileSync(join(ASSETS_DIR, "manifest.json"), "utf8"),
+) as { fixtures: ManifestFixture[] };
+
+for (const fixture of manifest.fixtures) {
+  test(`decode colorspace fixture ${fixture.slug} matches reference`, () => {
+    const decoded = decode(readFileSync(join(REPO_ROOT, fixture.jxl)));
+    const expected = loadReferenceRgbF32(fixture.reference_exr);
+
+    assert.equal(decoded.height, expected.height);
+    assert.equal(decoded.width, expected.width);
+    assert.equal(decoded.channels, expected.channels);
+    assert.equal(decoded.pixels.length, expected.pixels.length);
+
+    const mae = meanAbsError(decoded.pixels, expected.pixels);
+    assert.ok(
+      mae < fixture.mae_tolerance,
+      `${fixture.slug}: mean absolute error ${mae} exceeds ${fixture.mae_tolerance}`,
+    );
+  });
 }
 
 test("decode colors fixture is close to png", () => {

@@ -73,9 +73,9 @@ impl GpuImageBuffer {
     #[cfg(feature = "gpu")]
     pub fn wgpu_buffer(&self) -> &wgpu::Buffer {
         match self {
-            Self::F32 { buffer, .. }
-            | Self::I32 { buffer, .. }
-            | Self::I16 { buffer, .. } => buffer,
+            Self::F32 { buffer, .. } | Self::I32 { buffer, .. } | Self::I16 { buffer, .. } => {
+                buffer
+            }
         }
     }
 
@@ -86,7 +86,9 @@ impl GpuImageBuffer {
         let buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("jxlit_gpu_f32"),
             size: byte_len.max(4) as u64,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_DST
+                | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
         Self::F32 {
@@ -111,7 +113,9 @@ impl GpuImageBuffer {
                 let buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some("jxlit_gpu_f32"),
                     size: bytes.len().max(4) as u64,
-                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
+                    usage: wgpu::BufferUsages::STORAGE
+                        | wgpu::BufferUsages::COPY_DST
+                        | wgpu::BufferUsages::COPY_SRC,
                     mapped_at_creation: false,
                 });
                 ctx.queue.write_buffer(&buffer, 0, bytes);
@@ -128,7 +132,9 @@ impl GpuImageBuffer {
                 let buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some("jxlit_gpu_i32"),
                     size: bytes.len().max(4) as u64,
-                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
+                    usage: wgpu::BufferUsages::STORAGE
+                        | wgpu::BufferUsages::COPY_DST
+                        | wgpu::BufferUsages::COPY_SRC,
                     mapped_at_creation: false,
                 });
                 ctx.queue.write_buffer(&buffer, 0, bytes);
@@ -145,7 +151,9 @@ impl GpuImageBuffer {
                 let buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some("jxlit_gpu_i16"),
                     size: bytes.len().max(4) as u64,
-                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
+                    usage: wgpu::BufferUsages::STORAGE
+                        | wgpu::BufferUsages::COPY_DST
+                        | wgpu::BufferUsages::COPY_SRC,
                     mapped_at_creation: false,
                 });
                 ctx.queue.write_buffer(&buffer, 0, bytes);
@@ -345,7 +353,9 @@ pub fn sample_kind_bits(sample_kind: GpuSampleKind, bit_depth: BitDepth) -> (u32
     };
     let bits = match bit_depth {
         BitDepth::IntegerSample { bits_per_sample } => bits_per_sample,
-        BitDepth::FloatSample { bits_per_sample, .. } => bits_per_sample,
+        BitDepth::FloatSample {
+            bits_per_sample, ..
+        } => bits_per_sample,
     };
     (kind, bits)
 }

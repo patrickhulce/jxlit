@@ -327,7 +327,6 @@ fn main() {
             hardware: options.hardware,
             destination: options.destination,
             telemetry: true,
-            ..DecodeOptions::default()
         };
         let timebase = unix_time_ms();
         let wall_start = Instant::now();

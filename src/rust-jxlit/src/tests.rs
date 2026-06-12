@@ -1,15 +1,112 @@
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+use serde::Deserialize;
 
 use crate::{DecodeOptions, Hardware, PixelLayout, decode, decode_with_options};
 #[cfg(feature = "gpu")]
-use crate::{Destination, pipeline::gpu::{download_pixels, GpuEnvironment}};
+use crate::{
+    Destination,
+    pipeline::gpu::{GpuEnvironment, download_pixels},
+};
 
-fn assets_dir() -> PathBuf {
+fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("..")
-        .join("assets")
+}
+
+fn assets_dir() -> PathBuf {
+    repo_root().join("assets")
+}
+
+#[derive(Debug, Deserialize)]
+struct ManifestFixture {
+    slug: String,
+    jxl: String,
+    reference_exr: String,
+    mae_tolerance: f32,
+}
+
+#[derive(Debug, Deserialize)]
+struct Manifest {
+    fixtures: Vec<ManifestFixture>,
+}
+
+fn load_manifest() -> Manifest {
+    let path = assets_dir().join("manifest.json");
+    let text =
+        fs::read_to_string(&path).unwrap_or_else(|err| panic!("read {}: {err}", path.display()));
+    serde_json::from_str(&text).unwrap_or_else(|err| panic!("parse {}: {err}", path.display()))
+}
+
+fn parse_pfm_rgb_f32(data: &[u8]) -> (usize, usize, Vec<f32>) {
+    let first_end = data
+        .iter()
+        .position(|&b| b == b'\n')
+        .expect("PF magic line");
+    assert_eq!(&data[..first_end], b"PF");
+
+    let second_start = first_end + 1;
+    let second_end = data[second_start..]
+        .iter()
+        .position(|&b| b == b'\n')
+        .expect("dimensions line")
+        + second_start;
+    let dims = std::str::from_utf8(&data[second_start..second_end]).expect("utf8 dims");
+    let mut parts = dims.split_whitespace();
+    let width: usize = parts.next().expect("width").parse().expect("width");
+    let height: usize = parts.next().expect("height").parse().expect("height");
+
+    let third_start = second_end + 1;
+    let third_end = data[third_start..]
+        .iter()
+        .position(|&b| b == b'\n')
+        .expect("endianness line")
+        + third_start;
+    let scale = std::str::from_utf8(&data[third_start..third_end]).expect("utf8 scale");
+    assert!(
+        scale.starts_with('-'),
+        "expected little-endian PFM scale, got {scale}"
+    );
+
+    let pixel_offset = third_end + 1;
+    let expected_len = width * height * 3 * 4;
+    assert_eq!(
+        data.len() - pixel_offset,
+        expected_len,
+        "unexpected PFM payload length"
+    );
+
+    let mut pixels = Vec::with_capacity(width * height * 3);
+    for chunk in data[pixel_offset..].chunks_exact(4) {
+        pixels.push(f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
+    }
+
+    (height, width, pixels)
+}
+
+fn load_reference_pfm_f32(exr_path: &Path) -> (usize, usize, Vec<f32>) {
+    let output = Command::new("uv")
+        .args([
+            "run",
+            "scripts/exr_to_pfm.py",
+            exr_path.to_str().expect("utf8 exr path"),
+            "--stdout",
+        ])
+        .current_dir(repo_root())
+        .output()
+        .unwrap_or_else(|err| panic!("run exr_to_pfm for {}: {err}", exr_path.display()));
+
+    assert!(
+        output.status.success(),
+        "exr_to_pfm failed for {}: {}",
+        exr_path.display(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    parse_pfm_rgb_f32(&output.stdout)
 }
 
 fn load_png_rgb_f32(path: &PathBuf) -> (usize, usize, usize, Vec<f32>) {
@@ -46,6 +143,40 @@ fn mean_abs_error(a: &[f32], b: &[f32]) -> f32 {
 fn decode_rejects_invalid_input() {
     let err = decode(b"not-a-jxl").unwrap_err();
     assert!(!err.to_string().is_empty());
+}
+
+#[test]
+fn decode_colorspace_fixtures_match_manifest_references() {
+    let root = repo_root();
+    for fixture in load_manifest().fixtures {
+        let jxl_path = root.join(&fixture.jxl);
+        let exr_path = root.join(&fixture.reference_exr);
+
+        let jxl_bytes =
+            fs::read(&jxl_path).unwrap_or_else(|err| panic!("read {}: {err}", jxl_path.display()));
+        let decoded =
+            decode(&jxl_bytes).unwrap_or_else(|err| panic!("decode {}: {err}", fixture.slug));
+
+        let (ref_height, ref_width, ref_pixels) = load_reference_pfm_f32(&exr_path);
+
+        assert_eq!(decoded.height, ref_height, "{}", fixture.slug);
+        assert_eq!(decoded.width, ref_width, "{}", fixture.slug);
+        assert_eq!(decoded.channels, 3, "{}", fixture.slug);
+        assert_eq!(
+            decoded.pixels.as_cpu().expect("cpu pixels").len(),
+            ref_pixels.len(),
+            "{}",
+            fixture.slug
+        );
+
+        let mae = mean_abs_error(decoded.pixels.as_cpu().expect("cpu pixels"), &ref_pixels);
+        assert!(
+            mae < fixture.mae_tolerance,
+            "{} mean absolute error {mae} exceeds tolerance {}",
+            fixture.slug,
+            fixture.mae_tolerance
+        );
+    }
 }
 
 #[test]
@@ -230,10 +361,7 @@ fn decode_gpu_destination_returns_gpu_handle() {
         crate::DecodedPixels::Gpu(g) => g,
         crate::DecodedPixels::Cpu(_) => panic!("expected GPU pixel buffer"),
     };
-    assert_eq!(
-        gpu.len(),
-        decoded.width * decoded.height * decoded.channels
-    );
+    assert_eq!(gpu.len(), decoded.width * decoded.height * decoded.channels);
 
     let downloaded = download_pixels(&gpu).expect("download GPU pixels");
     let reference_decoded = decode(&jxl_bytes).expect("reference decode");

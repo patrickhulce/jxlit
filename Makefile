@@ -1,4 +1,4 @@
-.PHONY: all build lint lint-fix typecheck test format benchmark trace \
+.PHONY: all build lint lint-fix typecheck test format benchmark trace gen-test-assets \
         build-rust build-python build-node build-wasm build-bench-rust build-bench-python \
         lint-rust lint-python lint-node lint-wasm \
         lint-fix-rust lint-fix-python lint-fix-node lint-fix-wasm \
@@ -17,6 +17,9 @@ FILE ?= assets/frame_4K_10bit_e1_d0p5_fd4.jxl
 BENCHMARK_ARGS = --workers $(WORKERS) --iterations $(ITERATIONS) --file $(FILE) --threads $(THREADS) --layout $(LAYOUT) --hardware $(HARDWARE) --destination $(DESTINATION)
 
 all: build lint typecheck test
+
+gen-test-assets:
+	uv run scripts/gen_test_card.py
 
 build: build-rust build-python build-node build-wasm
 

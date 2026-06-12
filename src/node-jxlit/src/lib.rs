@@ -95,9 +95,9 @@ fn metadata_from_rust(metadata: &jxlit::DecodeMetadata) -> DecodeMetadata {
 }
 
 fn pixels_from_rust(pixels: jxlit::DecodedPixels) -> napi::Result<Vec<f32>> {
-    pixels.cpu().ok_or_else(|| {
-        Error::from_reason("GPU pixel buffers are not supported in Node bindings")
-    })
+    pixels
+        .cpu()
+        .ok_or_else(|| Error::from_reason("GPU pixel buffers are not supported in Node bindings"))
 }
 
 #[napi]

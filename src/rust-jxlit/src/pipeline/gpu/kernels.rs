@@ -18,9 +18,9 @@ use crate::vendor::jxl_frame::data::{HfGlobal, LfGlobal, LfGroup};
 use crate::vendor::jxl_render::{IndexedFrame, Reference, Region, RenderContext, Result};
 use crate::vendor::jxl_vardct::LfChannelCorrelation;
 
-use super::context::GpuPixelBuffer;
 #[cfg(feature = "gpu")]
 use super::context::GpuContext;
+use super::context::GpuPixelBuffer;
 use super::device::{DeviceCoefficients, DeviceImage};
 use super::image::GpuImageWithRegion;
 #[cfg(feature = "gpu")]
@@ -333,7 +333,9 @@ fn run_export_on_gpu(
     #[cfg(feature = "gpu")]
     {
         if channels > 8 {
-            return Err(format!("GPU export supports at most 8 channels, got {channels}"));
+            return Err(format!(
+                "GPU export supports at most 8 channels, got {channels}"
+            ));
         }
 
         let ctx = GpuContext::get().ok_or_else(|| "GPU device unavailable".to_string())?;
@@ -353,11 +355,13 @@ fn run_export_on_gpu(
             pixel_layout: layout_flag,
             plane_size: plane_size as u32,
         };
-        let params_buffer = ctx.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("jxlit_export_params"),
-            contents: bytemuck::bytes_of(&params),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
+        let params_buffer = ctx
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("jxlit_export_params"),
+                contents: bytemuck::bytes_of(&params),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
 
         let mut metas = [ChannelMeta {
             offset_x: 0,
@@ -397,11 +401,13 @@ fn run_export_on_gpu(
             mapped_at_creation: false,
         });
 
-        let meta_buffer = ctx.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("jxlit_export_meta"),
-            contents: bytemuck::cast_slice(&metas),
-            usage: wgpu::BufferUsages::STORAGE,
-        });
+        let meta_buffer = ctx
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("jxlit_export_meta"),
+                contents: bytemuck::cast_slice(&metas),
+                usage: wgpu::BufferUsages::STORAGE,
+            });
 
         let output_buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("jxlit_export_output"),

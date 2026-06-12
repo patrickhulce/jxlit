@@ -348,7 +348,8 @@ fn build_decoded_image(
 
     let (image, spots_fused) = fuse_spot_colors(rendered, options, env)?;
 
-    let cpu_image = into_cpu_arc(Arc::clone(&image)).map_err(|e| DecodeError::new(e.to_string()))?;
+    let cpu_image =
+        into_cpu_arc(Arc::clone(&image)).map_err(|e| DecodeError::new(e.to_string()))?;
     let selection = gather_export_channels(rendered, &cpu_image, left, top, spots_fused);
     let channels = selection.channel_indices.len();
     let width_us = width as usize;
@@ -473,14 +474,8 @@ fn build_decoded_image(
                 pixels.len()
             )));
         }
-        let gpu = upload_pixels(
-            &pixels,
-            width,
-            height,
-            channels as u32,
-            options.layout,
-        )
-        .map_err(DecodeError::new)?;
+        let gpu = upload_pixels(&pixels, width, height, channels as u32, options.layout)
+            .map_err(DecodeError::new)?;
         return Ok(DecodedImage {
             height: height_us,
             width: width_us,
@@ -792,9 +787,8 @@ pub fn build_low_frequency_image<S: Sample>(
         Ok(match if use_gpu { Device::Gpu } else { Device::Cpu } {
             Device::Cpu => from_cpu(low_frequency_image),
             Device::Gpu => DeviceImage::Gpu(
-                GpuImageWithRegion::from_cpu(&low_frequency_image).map_err(|_| {
-                    Error::NotSupported("GPU LF image materialization failed")
-                })?,
+                GpuImageWithRegion::from_cpu(&low_frequency_image)
+                    .map_err(|_| Error::NotSupported("GPU LF image materialization failed"))?,
             ),
         })
     }
