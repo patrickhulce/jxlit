@@ -257,6 +257,14 @@ impl GpuImageWithRegion {
         &self.regions
     }
 
+    pub(crate) fn regions_mut(&mut self) -> &mut [(Region, ChannelShift)] {
+        &mut self.regions
+    }
+
+    pub fn set_blend_done(&mut self, blend_done: bool) {
+        self.blend_done = blend_done;
+    }
+
     pub fn append_channel_shifted(
         &mut self,
         buffer: GpuImageBuffer,

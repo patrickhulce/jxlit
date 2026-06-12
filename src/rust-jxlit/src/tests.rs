@@ -498,3 +498,167 @@ fn fuse_spot_colors_gpu_matches_cpu() {
         assert!(mae < 1e-4, "spot fusion channel {ch} MAE {mae}");
     }
 }
+
+#[cfg(feature = "gpu")]
+fn fixture_image_header(name: &str) -> std::sync::Arc<jxl_image::ImageHeader> {
+    use jxl_threadpool::JxlThreadPool;
+
+    let bytes = fs::read(assets_dir().join(name)).expect("read jxl fixture");
+    let codestream =
+        crate::pipeline::parse::container::read_codestream(&bytes).expect("read codestream");
+    crate::pipeline::parse::container::read_header(&codestream, JxlThreadPool::none())
+        .expect("read header")
+        .image_header
+}
+
+#[cfg(feature = "gpu")]
+#[test]
+fn nonseparable_upsample_gpu_matches_cpu() {
+    if !GpuEnvironment::current().device_available {
+        eprintln!("skipping nonseparable_upsample_gpu_matches_cpu: no GPU adapter");
+        return;
+    }
+
+    use jxl_grid::AlignedGrid;
+
+    use crate::pipeline::gpu::{GpuImageWithRegion, upsample::gpu_upsample_channel_for_test};
+    use crate::vendor::jxl_render::{ImageBuffer, ImageWithRegion, Region, features::upsample};
+
+    const W: usize = 16;
+    const H: usize = 16;
+    let image_header = fixture_image_header("colors_e1_d0p5_fd4.jxl");
+
+    let mut pattern = AlignedGrid::with_alloc_tracker(W, H, None).expect("grid");
+    for (i, v) in pattern.buf_mut().iter_mut().enumerate() {
+        *v = ((i % W) as f32 + 1.0) / W as f32 * ((i / W) as f32 + 1.0) / H as f32;
+    }
+
+    let region = Region::with_size(W as u32, H as u32);
+    let mut cpu_region = region;
+    let cpu_out = upsample(
+        pattern.as_subgrid(),
+        &mut cpu_region,
+        &image_header,
+        2,
+        None,
+    )
+    .expect("cpu upsample")
+    .expect("upsample output");
+
+    let cpu_image = ImageWithRegion::new(1, None);
+    let mut cpu_image = cpu_image;
+    cpu_image.append_channel_shifted(
+        ImageBuffer::F32(pattern),
+        region,
+        jxl_modular::ChannelShift::from_shift(0),
+    );
+    let gpu_input = GpuImageWithRegion::from_cpu(&cpu_image)
+        .expect("upload")
+        .buffer()[0]
+        .try_clone()
+        .expect("clone channel");
+    let gpu_out = gpu_upsample_channel_for_test(gpu_input, &image_header, 2).expect("gpu upsample");
+
+    let mut gpu_image = GpuImageWithRegion::new(1, None);
+    gpu_image.append_channel_shifted(
+        gpu_out,
+        cpu_region,
+        jxl_modular::ChannelShift::from_shift(0),
+    );
+    let gpu_downloaded = gpu_image.to_cpu().expect("download");
+    let gpu_buf = gpu_downloaded.buffer()[0].as_float().expect("f32").buf();
+    let cpu_buf = cpu_out.buf();
+    assert_eq!(gpu_buf.len(), cpu_buf.len());
+    let mae = mean_abs_error(gpu_buf, cpu_buf);
+    assert!(mae < 1e-4, "nonseparable upsample MAE {mae}");
+}
+
+#[cfg(feature = "gpu")]
+#[test]
+fn blend_crop_gpu_matches_cpu() {
+    if !GpuEnvironment::current().device_available {
+        eprintln!("skipping blend_crop_gpu_matches_cpu: no GPU adapter");
+        return;
+    }
+
+    use jxl_grid::AlignedGrid;
+    use jxl_modular::ChannelShift;
+
+    use crate::pipeline::gpu::GpuImageWithRegion;
+    use crate::pipeline::gpu::crop::dispatch_crop_f32;
+    use crate::vendor::jxl_render::{ImageBuffer, ImageWithRegion, Region};
+
+    const W: usize = 32;
+    const H: usize = 32;
+    let full = Region::with_size(W as u32, H as u32);
+    let crop = Region {
+        left: 4,
+        top: 6,
+        width: 20,
+        height: 18,
+    };
+
+    let mut cpu_image = ImageWithRegion::new(1, None);
+    let mut grid = AlignedGrid::with_alloc_tracker(W, H, None).expect("grid");
+    for (i, v) in grid.buf_mut().iter_mut().enumerate() {
+        *v = i as f32 / (W * H) as f32;
+    }
+    cpu_image.append_channel_shifted(ImageBuffer::F32(grid), full, ChannelShift::from_shift(0));
+
+    let left = (crop.left - full.left) as u32;
+    let top = (crop.top - full.top) as u32;
+    let cpu_sub = cpu_image.buffer()[0]
+        .as_float()
+        .expect("f32")
+        .as_subgrid()
+        .subgrid(
+            left as usize..(left + crop.width) as usize,
+            top as usize..(top + crop.height) as usize,
+        );
+    let cpu_pixels: Vec<f32> = (0..crop.height as usize)
+        .flat_map(|y| cpu_sub.get_row(y).iter().copied())
+        .collect();
+
+    let gpu = GpuImageWithRegion::from_cpu(&cpu_image).expect("upload");
+    let cropped =
+        dispatch_crop_f32(&gpu.buffer()[0], left, top, crop.width, crop.height).expect("gpu crop");
+    let mut cropped_image = GpuImageWithRegion::new(1, None);
+    cropped_image.append_channel_shifted(cropped, crop, ChannelShift::from_shift(0));
+    let cropped_cpu = cropped_image.to_cpu().expect("download crop");
+    let gpu_pixels = cropped_cpu.buffer()[0].as_float().expect("f32").buf();
+    let mae = mean_abs_error(gpu_pixels, &cpu_pixels);
+    assert!(mae < 1e-6, "crop MAE {mae}");
+}
+
+#[cfg(feature = "gpu")]
+#[test]
+fn decode_gpu_up2_fixture_matches_cpu_pixels() {
+    if !GpuEnvironment::current().device_available {
+        eprintln!("skipping decode_gpu_up2_fixture_matches_cpu_pixels: no GPU adapter");
+        return;
+    }
+
+    let jxl_path = assets_dir().join("colors_up2_e1_d0p5_fd4.jxl");
+    if !jxl_path.exists() {
+        eprintln!("skipping decode_gpu_up2_fixture_matches_cpu_pixels: fixture missing");
+        return;
+    }
+
+    let jxl_bytes = fs::read(&jxl_path).expect("read jxl fixture");
+    let reference = decode(&jxl_bytes).expect("reference decode");
+    let gpu = decode_with_options(
+        &jxl_bytes,
+        &DecodeOptions {
+            hardware: Hardware::Gpu,
+            destination: Destination::Cpu,
+            ..DecodeOptions::default()
+        },
+    )
+    .expect("GPU decode");
+
+    let mae = mean_abs_error(
+        gpu.pixels.as_cpu().expect("cpu pixels"),
+        reference.pixels.as_cpu().expect("reference pixels"),
+    );
+    assert!(mae < 0.02, "GPU up2 fixture MAE {mae} exceeds tolerance");
+}

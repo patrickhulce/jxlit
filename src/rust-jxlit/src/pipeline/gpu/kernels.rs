@@ -20,17 +20,22 @@ use crate::vendor::jxl_vardct::LfChannelCorrelation;
 
 #[cfg(feature = "gpu")]
 use super::color_transform::{
-    build_gpu_plan, dispatch_invert_channels, dispatch_ycbcr_to_rgb, run_gpu_plan,
+    build_gpu_plan, build_record_gpu_plan, dispatch_invert_channels, dispatch_ycbcr_to_rgb,
+    run_gpu_plan,
 };
 #[cfg(feature = "gpu")]
 use super::context::GpuContext;
 use super::context::GpuPixelBuffer;
+#[cfg(feature = "gpu")]
+use super::crop::dispatch_crop_f32;
 #[cfg(feature = "gpu")]
 use super::device::materialize_on_gpu;
 use super::device::{DeviceCoefficients, DeviceImage};
 use super::image::GpuImageWithRegion;
 #[cfg(feature = "gpu")]
 use super::image::sample_kind_bits;
+#[cfg(feature = "gpu")]
+use super::upsample::upsample_nonseparable;
 
 macro_rules! gpu_unimplemented {
     ($name:literal) => {
@@ -122,29 +127,164 @@ pub fn run_jpeg_upsample_on_gpu(
 }
 
 pub fn run_nonseparable_upsample_on_gpu(
-    _fb: &mut DeviceImage,
-    _image_header: &ImageHeader,
-    _frame_header: &FrameHeader,
-    _region: Region,
+    fb: &mut DeviceImage,
+    image_header: &ImageHeader,
+    frame_header: &FrameHeader,
+    region: Region,
 ) -> Result<()> {
-    gpu_unimplemented!("run_nonseparable_upsample");
+    #[cfg(feature = "gpu")]
+    {
+        match fb {
+            DeviceImage::Gpu(gpu) => {
+                upsample_nonseparable(gpu, image_header, frame_header, region, false)
+            }
+            DeviceImage::Cpu(cpu) => {
+                let mut gpu =
+                    GpuImageWithRegion::from_cpu(cpu).map_err(|e| gpu_error(e.to_string()))?;
+                upsample_nonseparable(&mut gpu, image_header, frame_header, region, false)?;
+                *fb = DeviceImage::Gpu(gpu);
+                Ok(())
+            }
+        }
+    }
+    #[cfg(not(feature = "gpu"))]
+    {
+        let _ = (fb, image_header, frame_header, region);
+        gpu_unimplemented!("run_nonseparable_upsample");
+    }
+}
+
+#[cfg(feature = "gpu")]
+fn run_color_for_record_on_gpu_image(
+    image_header: &ImageHeader,
+    do_ycbcr: bool,
+    gpu_image: &mut GpuImageWithRegion,
+) -> Result<()> {
+    let metadata = &image_header.metadata;
+    let bit_depth = metadata.bit_depth;
+
+    if do_ycbcr {
+        let _ycbcr = crate::phase_guard!("color_for_record_gpu_ycbcr");
+        gpu_image.convert_modular_color(bit_depth)?;
+        dispatch_ycbcr_to_rgb(gpu_image).map_err(gpu_error)?;
+        if metadata.colour_encoding.colour_space() == jxl_color::ColourSpace::Grey {
+            gpu_image.remove_color_channels(1);
+        }
+        gpu_image.set_ct_done(true);
+    } else if metadata.xyb_encoded {
+        let plan = build_record_gpu_plan(image_header)
+            .map_err(|_| gpu_error("record color transform unsupported on GPU".into()))?;
+        gpu_image.convert_modular_color(bit_depth)?;
+        let output_channels = {
+            let _transform = crate::phase_guard!("color_for_record_gpu_transform");
+            run_gpu_plan(&plan, gpu_image).map_err(gpu_error)?
+        };
+        if output_channels < 3 {
+            gpu_image.remove_color_channels(output_channels);
+        }
+        gpu_image.set_ct_done(true);
+    }
+    Ok(())
 }
 
 pub fn run_color_for_record_on_gpu(
-    _image_header: &ImageHeader,
-    _do_ycbcr: bool,
-    _fb: &mut DeviceImage,
+    image_header: &ImageHeader,
+    do_ycbcr: bool,
+    fb: &mut DeviceImage,
     _pool: &JxlThreadPool,
 ) -> Result<()> {
-    gpu_unimplemented!("run_color_for_record");
+    #[cfg(feature = "gpu")]
+    {
+        match fb {
+            DeviceImage::Gpu(gpu) => run_color_for_record_on_gpu_image(image_header, do_ycbcr, gpu),
+            DeviceImage::Cpu(cpu) => {
+                let mut gpu =
+                    GpuImageWithRegion::from_cpu(cpu).map_err(|e| gpu_error(e.to_string()))?;
+                run_color_for_record_on_gpu_image(image_header, do_ycbcr, &mut gpu)?;
+                *fb = DeviceImage::Gpu(gpu);
+                Ok(())
+            }
+        }
+    }
+    #[cfg(not(feature = "gpu"))]
+    {
+        let _ = (image_header, do_ycbcr, fb, _pool);
+        gpu_unimplemented!("run_color_for_record");
+    }
 }
 
 pub fn run_blend_on_gpu(
-    _ctx: &RenderContext,
-    _idx: usize,
-    _grid: DeviceImage,
+    ctx: &RenderContext,
+    idx: usize,
+    grid: DeviceImage,
 ) -> Result<Arc<DeviceImage>> {
-    gpu_unimplemented!("run_blend");
+    #[cfg(feature = "gpu")]
+    {
+        let frame = &ctx.frames()[idx];
+        let frame_header = frame.header();
+        let image_header = frame.image_header();
+
+        let materialized = materialize_on_gpu(Arc::new(grid)).map_err(gpu_error)?;
+        let mut gpu_image = unwrap_gpu_image(materialized)?;
+
+        let oriented_image_region =
+            crate::vendor::jxl_render::util::apply_orientation_to_image_region(
+                image_header,
+                ctx.requested_image_region(),
+            );
+        let mut frame_region = oriented_image_region
+            .translate(-frame_header.x0, -frame_header.y0)
+            .downsample(frame_header.lf_level * 3);
+        frame_region = crate::vendor::jxl_render::util::pad_lf_region(frame_header, frame_region);
+        frame_region = crate::vendor::jxl_render::util::pad_color_region(
+            image_header,
+            frame_header,
+            frame_region,
+        );
+        frame_region = frame_region.upsample(frame_header.upsampling.ilog2());
+        if frame_header.frame_type.is_normal_frame() {
+            let full_image_region_in_frame =
+                Region::with_size(image_header.size.width, image_header.size.height)
+                    .translate(-frame_header.x0, -frame_header.y0);
+            frame_region = frame_region.intersection(full_image_region_in_frame);
+        }
+
+        let channel_count = gpu_image.buffer().len();
+        let mut crops = Vec::new();
+        for channel_idx in 0..channel_count {
+            let (region, _shift) = gpu_image.regions_and_shifts()[channel_idx];
+            let left = frame_region.left.saturating_sub(region.left) as u32;
+            let top = frame_region.top.saturating_sub(region.top) as u32;
+            if left == 0
+                && top == 0
+                && frame_region.width == region.width
+                && frame_region.height == region.height
+            {
+                continue;
+            }
+            let cropped = dispatch_crop_f32(
+                &gpu_image.buffer()[channel_idx],
+                left,
+                top,
+                frame_region.width,
+                frame_region.height,
+            )
+            .map_err(gpu_error)?;
+            crops.push((channel_idx, cropped));
+        }
+        for (channel_idx, cropped) in crops {
+            gpu_image.buffer_mut()[channel_idx] = cropped;
+            gpu_image.regions_mut()[channel_idx].0 = frame_region;
+        }
+
+        gpu_image.set_blend_done(true);
+        Ok(Arc::new(DeviceImage::Gpu(gpu_image)))
+    }
+    #[cfg(not(feature = "gpu"))]
+    {
+        let _ = (ctx, idx, grid);
+        gpu_unimplemented!("run_blend");
+    }
 }
 
 pub fn run_xyb2rgb_on_gpu(

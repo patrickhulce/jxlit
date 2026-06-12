@@ -4,9 +4,13 @@
 
 use std::sync::{Arc, OnceLock};
 
-use jxl_color::{ColorTransformGpuOp, GpuTransformUnsupported, TransferFunction};
+use jxl_color::{
+    ColorEncodingWithProfile, ColorTransform, ColorTransformGpuOp, ColourEncoding, ColourSpace,
+    EnumColourEncoding, GpuTransformUnsupported, NullCms, RenderingIntent, TransferFunction,
+};
 
 use crate::vendor::jxl_render::RenderContext;
+use jxl_image::ImageHeader;
 use wgpu::util::DeviceExt;
 
 use super::context::GpuContext;
@@ -150,6 +154,29 @@ pub fn build_gpu_plan(
         .map_err(|_| GpuTransformUnsupported::IccToIcc)?;
     ctx.with_cached_transform(|t| t.gpu_ops())
         .map_err(|_| GpuTransformUnsupported::IccToIcc)?
+}
+
+/// Builds a GPU plan for the intermediate "color for record" transform (XYB -> stored encoding).
+pub fn build_record_gpu_plan(
+    image_header: &ImageHeader,
+) -> std::result::Result<Vec<ColorTransformGpuOp>, GpuTransformUnsupported> {
+    let metadata = &image_header.metadata;
+    let ColourEncoding::Enum(encoding) = &metadata.colour_encoding else {
+        return Err(GpuTransformUnsupported::IccToIcc);
+    };
+    match encoding.colour_space {
+        ColourSpace::Xyb | ColourSpace::Unknown => return Err(GpuTransformUnsupported::IccToIcc),
+        _ => {}
+    }
+    let transform = ColorTransform::new(
+        &ColorEncodingWithProfile::new(EnumColourEncoding::xyb(RenderingIntent::Perceptual)),
+        &ColorEncodingWithProfile::new(encoding.clone()),
+        &metadata.opsin_inverse_matrix,
+        &metadata.tone_mapping,
+        &NullCms,
+    )
+    .map_err(|_| GpuTransformUnsupported::IccToIcc)?;
+    transform.gpu_ops()
 }
 
 struct ChannelView {

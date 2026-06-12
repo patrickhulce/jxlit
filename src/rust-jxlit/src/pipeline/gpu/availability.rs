@@ -14,6 +14,8 @@ use crate::types::Hardware;
 use crate::types::{DecodeOptions, PixelLayout};
 use crate::vendor::jxl_frame::FrameHeader;
 use crate::vendor::jxl_frame::data::{HfGlobal, LfGlobal, LfGroup};
+#[cfg(feature = "gpu")]
+use crate::vendor::jxl_frame::header::BlendMode as FrameBlendMode;
 use crate::vendor::jxl_render::{IndexedFrame, Reference, Region, RenderContext};
 use crate::vendor::jxl_vardct::LfChannelCorrelation;
 use jxl_grid::SharedSubgrid;
@@ -126,32 +128,80 @@ pub fn run_jpeg_upsample_available(
 pub fn run_nonseparable_upsample_available(
     _fb: &DeviceImage,
     _image_header: &ImageHeader,
-    _frame_header: &FrameHeader,
+    frame_header: &FrameHeader,
     _region: Region,
-    _options: &DecodeOptions,
-    _env: GpuEnvironment,
+    options: &DecodeOptions,
+    env: GpuEnvironment,
 ) -> bool {
-    false
+    #[cfg(feature = "gpu")]
+    {
+        gpu_hardware_available(options, env) && frame_header.upsampling != 1
+    }
+    #[cfg(not(feature = "gpu"))]
+    {
+        let _ = (frame_header, options, env);
+        false
+    }
 }
 
 pub fn run_color_for_record_available(
-    _image_header: &ImageHeader,
-    _do_ycbcr: bool,
+    image_header: &ImageHeader,
+    do_ycbcr: bool,
     _fb: &DeviceImage,
-    _options: &DecodeOptions,
-    _env: GpuEnvironment,
+    options: &DecodeOptions,
+    env: GpuEnvironment,
 ) -> bool {
-    false
+    #[cfg(feature = "gpu")]
+    {
+        if !gpu_hardware_available(options, env) {
+            return false;
+        }
+        if do_ycbcr {
+            return true;
+        }
+        let metadata = &image_header.metadata;
+        if !metadata.xyb_encoded {
+            return false;
+        }
+        super::color_transform::build_record_gpu_plan(image_header).is_ok()
+    }
+    #[cfg(not(feature = "gpu"))]
+    {
+        let _ = (image_header, do_ycbcr, options, env);
+        false
+    }
 }
 
 pub fn run_blend_available(
-    _ctx: &RenderContext,
-    _idx: usize,
+    ctx: &RenderContext,
+    idx: usize,
     _grid: &DeviceImage,
-    _options: &DecodeOptions,
-    _env: GpuEnvironment,
+    options: &DecodeOptions,
+    env: GpuEnvironment,
 ) -> bool {
-    false
+    #[cfg(feature = "gpu")]
+    {
+        if !gpu_hardware_available(options, env) {
+            return false;
+        }
+        let frame = &ctx.frames()[idx];
+        let frame_header = frame.header();
+        if !frame_header.frame_type.is_normal_frame() {
+            return false;
+        }
+        if !frame_header.resets_canvas && !frame_header.is_last {
+            return false;
+        }
+        if frame_header.can_reference() {
+            return false;
+        }
+        frame_header.blending_info.mode == FrameBlendMode::Replace
+    }
+    #[cfg(not(feature = "gpu"))]
+    {
+        let _ = (ctx, idx, options, env);
+        false
+    }
 }
 
 pub fn run_xyb2rgb_available(

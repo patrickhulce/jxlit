@@ -20,6 +20,8 @@ pub mod color_transform {
     }
 }
 pub mod context;
+#[cfg(feature = "gpu")]
+pub mod crop;
 pub mod device;
 pub mod environment;
 pub mod image;
@@ -29,6 +31,8 @@ pub mod modular;
 #[cfg(feature = "gpu")]
 pub mod pipeline;
 pub mod transfer;
+#[cfg(feature = "gpu")]
+pub mod upsample;
 
 pub use context::GpuPixelBuffer;
 pub use device::{
