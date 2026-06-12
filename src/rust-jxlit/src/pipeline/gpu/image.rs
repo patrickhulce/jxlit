@@ -15,6 +15,8 @@ use crate::vendor::jxl_render::{ImageWithRegion, Region, Result};
 
 #[cfg(feature = "gpu")]
 use super::context::GpuContext;
+#[cfg(feature = "gpu")]
+use super::pipeline;
 
 /// Sample storage kind for a GPU channel buffer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,7 +82,7 @@ impl GpuImageBuffer {
     }
 
     #[cfg(feature = "gpu")]
-    fn empty_f32(width: usize, height: usize, ctx: &GpuContext) -> Self {
+    pub(crate) fn empty_f32(width: usize, height: usize, ctx: &GpuContext) -> Self {
         let len = width * height;
         let byte_len = len * std::mem::size_of::<f32>();
         let buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
@@ -164,6 +166,48 @@ impl GpuImageBuffer {
                 }
             }
         }
+    }
+
+    #[cfg(feature = "gpu")]
+    pub fn try_clone(&self) -> std::result::Result<Self, String> {
+        let ctx = GpuContext::get().ok_or_else(|| "GPU device unavailable".to_string())?;
+        let byte_len = match self {
+            Self::F32 { width, height, .. } => width * height * 4,
+            Self::I32 { width, height, .. } => width * height * 4,
+            Self::I16 { width, height, .. } => width * height * 2,
+        };
+        let dst = ctx.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("jxlit_gpu_clone"),
+            size: byte_len.max(4) as u64,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_DST
+                | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        pipeline::copy_buffer(ctx, self.wgpu_buffer(), &dst, byte_len as u64);
+        Ok(match self {
+            Self::F32 { width, height, .. } => Self::F32 {
+                width: *width,
+                height: *height,
+                buffer: Arc::new(dst),
+            },
+            Self::I32 { width, height, .. } => Self::I32 {
+                width: *width,
+                height: *height,
+                buffer: Arc::new(dst),
+            },
+            Self::I16 { width, height, .. } => Self::I16 {
+                width: *width,
+                height: *height,
+                buffer: Arc::new(dst),
+            },
+        })
+    }
+
+    #[cfg(not(feature = "gpu"))]
+    pub fn try_clone(&self) -> std::result::Result<Self, String> {
+        let _ = self;
+        Err("GPU feature not enabled".to_string())
     }
 }
 
@@ -262,11 +306,69 @@ impl GpuImageWithRegion {
     }
 
     pub fn clone_gray(&mut self) -> Result<()> {
-        unimplemented!("GPU path not implemented: clone_gray");
+        #[cfg(feature = "gpu")]
+        {
+            assert_eq!(self.color_channels, 1);
+            let gray = self.buffer[0].try_clone().map_err(|e| {
+                crate::vendor::jxl_render::Error::NotSupported(Box::leak(e.into_boxed_str()))
+            })?;
+            let region = self.regions[0];
+            self.buffer.insert(
+                1,
+                gray.try_clone().map_err(|e| {
+                    crate::vendor::jxl_render::Error::NotSupported(Box::leak(e.into_boxed_str()))
+                })?,
+            );
+            self.regions.insert(1, region);
+            self.buffer.insert(2, gray);
+            self.regions.insert(2, region);
+            self.color_channels = 3;
+            Ok(())
+        }
+        #[cfg(not(feature = "gpu"))]
+        {
+            unimplemented!("GPU path not implemented: clone_gray");
+        }
     }
 
-    pub fn convert_modular_color(&mut self, _bit_depth: BitDepth) -> Result<()> {
-        unimplemented!("GPU path not implemented: convert_modular_color");
+    pub fn convert_modular_color(&mut self, bit_depth: BitDepth) -> Result<()> {
+        #[cfg(feature = "gpu")]
+        {
+            assert!(self.buffer.len() >= self.color_channels);
+            for idx in 0..self.color_channels {
+                let converted =
+                    super::modular::dispatch_modular_to_float(&self.buffer[idx], bit_depth)
+                        .map_err(|e| {
+                            crate::vendor::jxl_render::Error::NotSupported(Box::leak(
+                                e.into_boxed_str(),
+                            ))
+                        })?;
+                self.buffer[idx] = converted;
+            }
+            Ok(())
+        }
+        #[cfg(not(feature = "gpu"))]
+        {
+            let _ = bit_depth;
+            unimplemented!("GPU path not implemented: convert_modular_color");
+        }
+    }
+
+    pub fn convert_channel_to_float(&mut self, idx: usize, bit_depth: BitDepth) -> Result<()> {
+        #[cfg(feature = "gpu")]
+        {
+            let converted = super::modular::dispatch_modular_to_float(&self.buffer[idx], bit_depth)
+                .map_err(|e| {
+                    crate::vendor::jxl_render::Error::NotSupported(Box::leak(e.into_boxed_str()))
+                })?;
+            self.buffer[idx] = converted;
+            Ok(())
+        }
+        #[cfg(not(feature = "gpu"))]
+        {
+            let _ = (idx, bit_depth);
+            unimplemented!("GPU path not implemented: convert_channel_to_float");
+        }
     }
 
     pub fn fill_opaque_alpha(&mut self, _ec_info: &[jxl_image::ExtraChannelInfo]) {
@@ -285,7 +387,6 @@ impl GpuImageWithRegion {
         self.ct_done = ct_done;
     }
 
-    /// Materializes a CPU image on the GPU via raw-byte upload (cold start).
     pub fn from_cpu(cpu: &ImageWithRegion) -> std::result::Result<Self, String> {
         #[cfg(feature = "gpu")]
         {
@@ -304,8 +405,105 @@ impl GpuImageWithRegion {
         }
     }
 
+    /// Downloads GPU-resident channels back to a CPU [`ImageWithRegion`].
+    pub fn to_cpu(&self) -> std::result::Result<ImageWithRegion, String> {
+        #[cfg(feature = "gpu")]
+        {
+            use crate::vendor::jxl_render::ImageBuffer;
+            use jxl_grid::AlignedGrid;
+
+            let ctx = GpuContext::get().ok_or_else(|| "GPU device unavailable".to_string())?;
+            let mut cpu = ImageWithRegion::new(self.color_channels, self.tracker.as_ref());
+            cpu.set_ct_done(self.ct_done);
+            for (gpu_buf, (region, shift)) in self.buffer.iter().zip(self.regions.iter()) {
+                let width = gpu_buf.width();
+                let height = gpu_buf.height();
+                let len = width * height;
+                let byte_len = match gpu_buf.sample_kind() {
+                    GpuSampleKind::F32 | GpuSampleKind::I32 => len * 4,
+                    GpuSampleKind::I16 => len * 2,
+                };
+                let staging = ctx.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("jxlit_download_staging"),
+                    size: byte_len.max(4) as u64,
+                    usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+                let mut encoder =
+                    ctx.device
+                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                            label: Some("download_image"),
+                        });
+                encoder.copy_buffer_to_buffer(
+                    gpu_buf.wgpu_buffer(),
+                    0,
+                    &staging,
+                    0,
+                    byte_len as u64,
+                );
+                ctx.queue.submit(std::iter::once(encoder.finish()));
+                staging.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+                ctx.device.poll(wgpu::Maintain::Wait);
+                let data = staging.slice(..).get_mapped_range();
+                let image_buf = match gpu_buf.sample_kind() {
+                    GpuSampleKind::F32 => {
+                        let mut grid =
+                            AlignedGrid::with_alloc_tracker(width, height, self.tracker.as_ref())
+                                .map_err(|e| e.to_string())?;
+                        grid.buf_mut().copy_from_slice(bytemuck::cast_slice(&data));
+                        ImageBuffer::F32(grid)
+                    }
+                    GpuSampleKind::I32 => {
+                        let mut grid =
+                            AlignedGrid::with_alloc_tracker(width, height, self.tracker.as_ref())
+                                .map_err(|e| e.to_string())?;
+                        grid.buf_mut().copy_from_slice(bytemuck::cast_slice(&data));
+                        ImageBuffer::I32(grid)
+                    }
+                    GpuSampleKind::I16 => {
+                        let mut grid =
+                            AlignedGrid::with_alloc_tracker(width, height, self.tracker.as_ref())
+                                .map_err(|e| e.to_string())?;
+                        grid.buf_mut().copy_from_slice(bytemuck::cast_slice(&data));
+                        ImageBuffer::I16(grid)
+                    }
+                };
+                drop(data);
+                staging.unmap();
+                cpu.append_channel_shifted(image_buf, *region, *shift);
+            }
+            Ok(cpu)
+        }
+        #[cfg(not(feature = "gpu"))]
+        {
+            let _ = self;
+            Err("GPU feature not enabled".to_string())
+        }
+    }
+
     pub fn try_clone(&self) -> Result<Self> {
-        unimplemented!("GPU path not implemented: try_clone");
+        #[cfg(feature = "gpu")]
+        {
+            let mut out = Self::new(self.color_channels, self.tracker.as_ref());
+            out.ct_done = self.ct_done;
+            out.blend_done = self.blend_done;
+            for (buf, (region, shift)) in self.buffer.iter().zip(self.regions.iter()) {
+                out.append_channel_shifted(
+                    buf.try_clone().map_err(|e| {
+                        crate::vendor::jxl_render::Error::NotSupported(Box::leak(
+                            e.into_boxed_str(),
+                        ))
+                    })?,
+                    *region,
+                    *shift,
+                );
+            }
+            Ok(out)
+        }
+        #[cfg(not(feature = "gpu"))]
+        {
+            unimplemented!("GPU path not implemented: try_clone");
+        }
     }
 
     pub fn color_groups_with_group_id(

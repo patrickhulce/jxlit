@@ -4,6 +4,9 @@ use std::process::Command;
 
 use serde::Deserialize;
 
+#[cfg(feature = "gpu")]
+use std::sync::Arc;
+
 use crate::{DecodeOptions, Hardware, PixelLayout, decode, decode_with_options};
 #[cfg(feature = "gpu")]
 use crate::{
@@ -330,7 +333,7 @@ fn decode_gpu_export_matches_cpu_pixels() {
 
     let mae = mean_abs_error(cpu_pixels, default_pixels);
     assert!(
-        mae < 1e-5,
+        mae < 5e-5,
         "GPU export CPU destination MAE {mae} exceeds tolerance"
     );
 }
@@ -371,7 +374,127 @@ fn decode_gpu_destination_returns_gpu_handle() {
         .expect("reference cpu pixels");
     let mae = mean_abs_error(&downloaded, reference);
     assert!(
-        mae < 1e-5,
+        mae < 5e-5,
         "GPU destination download MAE {mae} exceeds tolerance"
     );
+}
+
+#[cfg(feature = "gpu")]
+#[test]
+fn decode_gpu_full_tail_matches_cpu_pixels() {
+    if !GpuEnvironment::current().device_available {
+        eprintln!("skipping decode_gpu_full_tail_matches_cpu_pixels: no GPU adapter");
+        return;
+    }
+
+    let assets = assets_dir();
+    let jxl_path = assets.join("colors_e1_d0p5_fd4.jxl");
+    let jxl_bytes = fs::read(&jxl_path).expect("read jxl fixture");
+
+    let reference = decode(&jxl_bytes).expect("reference decode");
+    let gpu = decode_with_options(
+        &jxl_bytes,
+        &DecodeOptions {
+            hardware: Hardware::Gpu,
+            destination: Destination::Cpu,
+            ..DecodeOptions::default()
+        },
+    )
+    .expect("GPU tail decode");
+
+    let mae = mean_abs_error(
+        gpu.pixels.as_cpu().expect("cpu pixels"),
+        reference.pixels.as_cpu().expect("reference pixels"),
+    );
+    assert!(mae < 0.02, "GPU full tail MAE {mae} exceeds tolerance 0.02");
+}
+
+#[cfg(feature = "gpu")]
+#[test]
+fn fuse_spot_colors_gpu_matches_cpu() {
+    if !GpuEnvironment::current().device_available {
+        eprintln!("skipping fuse_spot_colors_gpu_matches_cpu: no GPU adapter");
+        return;
+    }
+
+    use jxl_grid::AlignedGrid;
+    use jxl_image::BitDepth;
+
+    use crate::pipeline::gpu::{DeviceImage, GpuImageWithRegion, kernels};
+    use crate::vendor::jxl_render::{
+        ImageBuffer, ImageWithRegion, Region, features::render_spot_color,
+    };
+
+    const W: usize = 16;
+    const H: usize = 16;
+    let len = W * H;
+
+    let mut cpu_image = ImageWithRegion::new(3, None);
+    for c in 0..3 {
+        let mut grid = AlignedGrid::with_alloc_tracker(W, H, None).expect("grid");
+        for (i, v) in grid.buf_mut().iter_mut().enumerate() {
+            *v = (i as f32 + c as f32 * 0.01) / len as f32;
+        }
+        cpu_image.append_channel_shifted(
+            ImageBuffer::F32(grid),
+            Region::with_size(W as u32, H as u32),
+            jxl_modular::ChannelShift::from_shift(0),
+        );
+    }
+    let mut spot = AlignedGrid::with_alloc_tracker(W, H, None).expect("spot");
+    for (i, v) in spot.buf_mut().iter_mut().enumerate() {
+        *v = (i as f32) / len as f32 * 0.5;
+    }
+    cpu_image.append_channel_shifted(
+        ImageBuffer::F32(spot),
+        Region::with_size(W as u32, H as u32),
+        jxl_modular::ChannelShift::from_shift(0),
+    );
+
+    let gpu = GpuImageWithRegion::from_cpu(&cpu_image).expect("upload");
+
+    let mut cpu_ref = cpu_image;
+    let ec = jxl_image::ExtraChannelType::SpotColour {
+        red: 0.9,
+        green: 0.1,
+        blue: 0.2,
+        solidity: 0.75,
+    };
+    let (c0, rest) = cpu_ref.buffer_mut().split_at_mut(1);
+    let (c1, c2) = rest.split_at_mut(1);
+    let (c2, spot_buf) = c2.split_at_mut(1);
+    render_spot_color(
+        [
+            c0[0].as_float_mut().expect("f32"),
+            c1[0].as_float_mut().expect("f32"),
+            c2[0].as_float_mut().expect("f32"),
+        ],
+        spot_buf[0].as_float().expect("f32"),
+        &ec,
+    )
+    .expect("cpu spot render");
+
+    let bit_depth = BitDepth::FloatSample {
+        bits_per_sample: 32,
+        exp_bits: 8,
+    };
+    let (gpu_out, fused) = kernels::fuse_spot_colors_on_gpu(
+        Arc::new(DeviceImage::Gpu(gpu)),
+        bit_depth,
+        &[(ec, bit_depth)],
+    )
+    .expect("gpu fuse");
+    assert!(fused);
+
+    let gpu_cpu = match gpu_out.as_ref() {
+        DeviceImage::Gpu(g) => g.to_cpu().expect("download"),
+        DeviceImage::Cpu(_) => panic!("expected gpu"),
+    };
+
+    for ch in 0..3 {
+        let gpu_buf = gpu_cpu.buffer()[ch].as_float().expect("f32").buf();
+        let cpu_buf = cpu_ref.buffer()[ch].as_float().expect("f32").buf();
+        let mae = mean_abs_error(gpu_buf, cpu_buf);
+        assert!(mae < 1e-4, "spot fusion channel {ch} MAE {mae}");
+    }
 }

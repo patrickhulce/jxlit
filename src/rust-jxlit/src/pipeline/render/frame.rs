@@ -196,14 +196,14 @@ struct ExportChannelSelection<'a> {
 
 fn gather_export_channels<'a>(
     rendered: &RenderedFrame,
-    cpu_image: &'a ImageWithRegion,
+    device_image: &DeviceImage,
+    cpu_image: Option<&'a ImageWithRegion>,
     left: i32,
     top: i32,
     spots_fused: bool,
 ) -> ExportChannelSelection<'a> {
-    let fb = cpu_image.buffer();
-    let color_channels = cpu_image.color_channels();
-    let regions_and_shifts = cpu_image.regions_and_shifts();
+    let color_channels = device_image.color_channels();
+    let regions_and_shifts = device_image.regions_and_shifts();
 
     let mut channel_indices: Vec<usize> = (0..color_channels).collect();
     let mut bit_depth = vec![rendered.color_bit_depth; color_channels];
@@ -247,7 +247,12 @@ fn gather_export_channels<'a>(
     }
 
     let mut spot_colors = Vec::new();
-    if !spots_fused && rendered.render_spot_color && color_channels == 3 {
+    if !spots_fused
+        && rendered.render_spot_color
+        && color_channels == 3
+        && let Some(cpu_image) = cpu_image
+    {
+        let fb = cpu_image.buffer();
         for (ec_idx, (ec, (region, _))) in rendered
             .extra_channels
             .iter()
@@ -300,18 +305,6 @@ impl ExportGpuInput<'_> {
     }
 }
 
-fn gpu_image_for_export<'a>(
-    device_image: &'a DeviceImage,
-    cpu_image: &'a ImageWithRegion,
-) -> std::result::Result<ExportGpuInput<'a>, DecodeError> {
-    match device_image {
-        DeviceImage::Gpu(gpu) => Ok(ExportGpuInput::Resident(gpu)),
-        DeviceImage::Cpu(_) => GpuImageWithRegion::from_cpu(cpu_image)
-            .map(ExportGpuInput::Materialized)
-            .map_err(DecodeError::new),
-    }
-}
-
 fn finalize_pixels(
     gpu: crate::pipeline::gpu::GpuPixelBuffer,
     options: &DecodeOptions,
@@ -346,11 +339,34 @@ fn build_decoded_image(
         std::mem::swap(&mut width, &mut height);
     }
 
-    let (image, spots_fused) = fuse_spot_colors(rendered, options, env)?;
+    let (image, spots_fused) = {
+        let _fuse = crate::phase_guard!("fuse_spot_colors");
+        fuse_spot_colors(rendered, options, env)?
+    };
 
-    let cpu_image =
-        into_cpu_arc(Arc::clone(&image)).map_err(|e| DecodeError::new(e.to_string()))?;
-    let selection = gather_export_channels(rendered, &cpu_image, left, top, spots_fused);
+    let color_channels = image.color_channels();
+    let needs_cpu_spots = !spots_fused
+        && rendered.render_spot_color
+        && color_channels == 3
+        && rendered
+            .extra_channels
+            .iter()
+            .any(|(ec, _)| matches!(ec, ExtraChannelType::SpotColour { .. }));
+
+    let cpu_for_spots = if needs_cpu_spots {
+        Some(into_cpu_arc(Arc::clone(&image)).map_err(|e| DecodeError::new(e.to_string()))?)
+    } else {
+        None
+    };
+
+    let selection = gather_export_channels(
+        rendered,
+        image.as_ref(),
+        cpu_for_spots.as_deref(),
+        left,
+        top,
+        spots_fused,
+    );
     let channels = selection.channel_indices.len();
     let width_us = width as usize;
     let height_us = height as usize;
@@ -385,30 +401,43 @@ fn build_decoded_image(
     };
 
     if use_gpu_export {
-        let gpu_input = gpu_image_for_export(image.as_ref(), &cpu_image)?;
+        let gpu_input = match image.as_ref() {
+            DeviceImage::Gpu(gpu) => ExportGpuInput::Resident(gpu),
+            DeviceImage::Cpu(cpu) => {
+                let cpu_ref = cpu_for_spots.as_deref().unwrap_or(cpu);
+                let gpu = {
+                    let _upload = crate::phase_guard!("export_gpu_materialize");
+                    GpuImageWithRegion::from_cpu(cpu_ref).map_err(DecodeError::new)?
+                };
+                ExportGpuInput::Materialized(gpu)
+            }
+        };
         let gpu = gpu_input.image();
-        let gpu_pixels = match options.layout {
-            PixelLayout::Interleaved => kernels::run_interleave_on_gpu(
-                gpu,
-                &selection.channel_indices,
-                &selection.bit_depth,
-                &selection.start_offset_xy,
-                orientation,
-                width,
-                height,
-                channels,
-            ),
-            PixelLayout::Planar => kernels::run_export_planar_on_gpu(
-                gpu,
-                &selection.channel_indices,
-                &selection.bit_depth,
-                &selection.start_offset_xy,
-                orientation,
-                width,
-                height,
-                channels,
-                plane_size,
-            ),
+        let gpu_pixels = {
+            let _export = crate::phase_guard!("export_gpu");
+            match options.layout {
+                PixelLayout::Interleaved => kernels::run_interleave_on_gpu(
+                    gpu,
+                    &selection.channel_indices,
+                    &selection.bit_depth,
+                    &selection.start_offset_xy,
+                    orientation,
+                    width,
+                    height,
+                    channels,
+                ),
+                PixelLayout::Planar => kernels::run_export_planar_on_gpu(
+                    gpu,
+                    &selection.channel_indices,
+                    &selection.bit_depth,
+                    &selection.start_offset_xy,
+                    orientation,
+                    width,
+                    height,
+                    channels,
+                    plane_size,
+                ),
+            }
         }
         .map_err(DecodeError::new)?;
 
@@ -421,8 +450,10 @@ fn build_decoded_image(
         });
     }
 
+    let cpu_image =
+        into_cpu_arc(Arc::clone(&image)).map_err(|e| DecodeError::new(e.to_string()))?;
+
     if options.destination == Destination::Gpu && !use_gpu_export {
-        // CPU fallback path, then H->D upload for destination=Gpu.
         let fb = cpu_image.buffer();
         let grids: Vec<&ImageBuffer> = selection
             .channel_indices

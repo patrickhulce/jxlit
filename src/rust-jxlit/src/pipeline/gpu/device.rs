@@ -278,14 +278,36 @@ pub fn from_cpu_arc(image: Arc<ImageWithRegion>) -> Arc<DeviceImage> {
     )))
 }
 
+/// Uploads a CPU image to the GPU when needed, or returns the resident GPU image.
+pub fn materialize_on_gpu(
+    image: Arc<DeviceImage>,
+) -> std::result::Result<Arc<DeviceImage>, String> {
+    match Arc::try_unwrap(image) {
+        Ok(DeviceImage::Gpu(gpu)) => Ok(Arc::new(DeviceImage::Gpu(gpu))),
+        Ok(DeviceImage::Cpu(cpu)) => {
+            GpuImageWithRegion::from_cpu(&cpu).map(|gpu| Arc::new(DeviceImage::Gpu(gpu)))
+        }
+        Err(arc) => match arc.as_ref() {
+            DeviceImage::Gpu(_) => Ok(arc),
+            DeviceImage::Cpu(cpu) => {
+                GpuImageWithRegion::from_cpu(cpu).map(|gpu| Arc::new(DeviceImage::Gpu(gpu)))
+            }
+        },
+    }
+}
+
 /// Converts a device image back to CPU for vendored APIs that still require it.
 pub fn into_cpu_arc(image: Arc<DeviceImage>) -> Result<Arc<ImageWithRegion>> {
     match Arc::try_unwrap(image) {
         Ok(DeviceImage::Cpu(image)) => Ok(Arc::new(image)),
-        Ok(DeviceImage::Gpu(_)) => unimplemented!("GPU path not implemented: download image"),
+        Ok(DeviceImage::Gpu(gpu)) => gpu.to_cpu().map(Arc::new).map_err(|e| {
+            crate::vendor::jxl_render::Error::NotSupported(Box::leak(e.into_boxed_str()))
+        }),
         Err(arc) => match arc.as_ref() {
             DeviceImage::Cpu(image) => Ok(Arc::new(image.try_clone()?)),
-            DeviceImage::Gpu(_) => unimplemented!("GPU path not implemented: download image"),
+            DeviceImage::Gpu(gpu) => gpu.to_cpu().map(Arc::new).map_err(|e| {
+                crate::vendor::jxl_render::Error::NotSupported(Box::leak(e.into_boxed_str()))
+            }),
         },
     }
 }

@@ -155,23 +155,46 @@ pub fn run_blend_available(
 }
 
 pub fn run_xyb2rgb_available(
-    _ctx: &RenderContext,
-    _frame: &IndexedFrame,
-    _grid: &DeviceImage,
-    _options: &DecodeOptions,
-    _env: GpuEnvironment,
+    ctx: &RenderContext,
+    frame: &IndexedFrame,
+    grid: &DeviceImage,
+    options: &DecodeOptions,
+    env: GpuEnvironment,
 ) -> bool {
-    false
+    #[cfg(feature = "gpu")]
+    {
+        gpu_hardware_available(options, env)
+            && !grid.ct_done()
+            && frame.header().encoded_color_channels() == 3
+            && super::color_transform::build_gpu_plan(ctx).is_ok()
+    }
+    #[cfg(not(feature = "gpu"))]
+    {
+        let _ = (ctx, frame, grid, options, env);
+        false
+    }
 }
 
 pub fn fuse_spot_colors_available(
-    _image: &DeviceImage,
+    image: &DeviceImage,
     _color_bit_depth: BitDepth,
-    _extra_channels: &[(ExtraChannelType, BitDepth)],
-    _options: &DecodeOptions,
-    _env: GpuEnvironment,
+    extra_channels: &[(ExtraChannelType, BitDepth)],
+    options: &DecodeOptions,
+    env: GpuEnvironment,
 ) -> bool {
-    false
+    #[cfg(feature = "gpu")]
+    {
+        gpu_hardware_available(options, env)
+            && image.color_channels() == 3
+            && extra_channels
+                .iter()
+                .any(|(ec, _)| matches!(ec, ExtraChannelType::SpotColour { .. }))
+    }
+    #[cfg(not(feature = "gpu"))]
+    {
+        let _ = (image, extra_channels, options, env);
+        false
+    }
 }
 
 pub fn run_interleave_available(
@@ -209,16 +232,25 @@ pub fn run_export_planar_available(
 }
 
 #[cfg(feature = "gpu")]
+fn gpu_hardware_available(options: &DecodeOptions, env: GpuEnvironment) -> bool {
+    options.hardware == Hardware::Gpu
+        && env.device_available
+        && super::context::GpuContext::get().is_some()
+}
+
+#[cfg(not(feature = "gpu"))]
+fn gpu_hardware_available(_options: &DecodeOptions, _env: GpuEnvironment) -> bool {
+    false
+}
+
+#[cfg(feature = "gpu")]
 fn gpu_export_base_available(
     layout: PixelLayout,
     required: PixelLayout,
     options: &DecodeOptions,
     env: GpuEnvironment,
 ) -> bool {
-    options.hardware == Hardware::Gpu
-        && env.device_available
-        && layout == required
-        && super::context::GpuContext::get().is_some()
+    gpu_hardware_available(options, env) && layout == required
 }
 
 #[cfg(not(feature = "gpu"))]

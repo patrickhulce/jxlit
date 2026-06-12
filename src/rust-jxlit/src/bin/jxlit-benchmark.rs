@@ -344,7 +344,7 @@ fn main() {
             .expect("telemetry decode must return telemetry");
         std::hint::black_box(&telemetry_decode);
         let rebased = rebase_telemetry(native, timebase, "rust_decode", wall_ms);
-        print_phase_summary(&rebased, "rust", 10);
+        print_phase_summary(&rebased, "rust", 25);
         format!(",\"telemetry\":{}", telemetry_to_json(&rebased))
     };
 

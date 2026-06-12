@@ -15,13 +15,11 @@ rayon = ["jxl-threadpool/rayon"]
 gpu = ["dep:wgpu", "dep:pollster"]
 
 [dependencies]
-# Direct deps used by our pipeline and by the vendored sub-crates (the vendored
-# jxl-render/jxl-frame/jxl-vardct live under src/vendor). Versions match the set
-# resolved in Cargo.lock that the vendored sources were copied against.
+# Direct deps used by our pipeline and by the vendored sub-crates under src/vendor/.
 bytemuck = { version = "1.19", features = ["derive"] }
 jxl-bitstream = "1.1"
 jxl-coding = "1.0"
-jxl-color = "0.11"
+jxl-color = { path = "src/vendor/jxl-color" }
 jxl-grid = "0.6.2"
 jxl-image = "0.13"
 jxl-modular = "0.11.3"

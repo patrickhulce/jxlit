@@ -27,11 +27,19 @@ pub fn run_xyb2rgb(
     env: GpuEnvironment,
 ) -> Result<Arc<DeviceImage>> {
     if availability::run_xyb2rgb_available(ctx, frame, grid.as_ref(), options, env) {
+        let _gpu = crate::phase_guard!("xyb2rgb_gpu");
         return kernels::run_xyb2rgb_on_gpu(ctx, frame, grid);
     }
 
-    let cpu = into_cpu_arc(grid)?;
-    let out = ctx.postprocess_keyframe(frame, cpu)?;
+    let _cpu = crate::phase_guard!("xyb2rgb_cpu");
+    let cpu = {
+        let _download = crate::phase_guard!("xyb2rgb_cpu_download");
+        into_cpu_arc(grid)?
+    };
+    let out = {
+        let _transform = crate::phase_guard!("xyb2rgb_cpu_transform");
+        ctx.postprocess_keyframe(frame, cpu)?
+    };
     Ok(from_cpu_arc(out))
 }
 

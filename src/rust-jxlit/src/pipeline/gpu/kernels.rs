@@ -19,8 +19,14 @@ use crate::vendor::jxl_render::{IndexedFrame, Reference, Region, RenderContext, 
 use crate::vendor::jxl_vardct::LfChannelCorrelation;
 
 #[cfg(feature = "gpu")]
+use super::color_transform::{
+    build_gpu_plan, dispatch_invert_channels, dispatch_ycbcr_to_rgb, run_gpu_plan,
+};
+#[cfg(feature = "gpu")]
 use super::context::GpuContext;
 use super::context::GpuPixelBuffer;
+#[cfg(feature = "gpu")]
+use super::device::materialize_on_gpu;
 use super::device::{DeviceCoefficients, DeviceImage};
 use super::image::GpuImageWithRegion;
 #[cfg(feature = "gpu")]
@@ -30,6 +36,23 @@ macro_rules! gpu_unimplemented {
     ($name:literal) => {
         unimplemented!(concat!("GPU path not implemented: ", $name))
     };
+}
+
+#[cfg(feature = "gpu")]
+fn gpu_error(msg: String) -> crate::vendor::jxl_render::Error {
+    crate::vendor::jxl_render::Error::NotSupported(Box::leak(msg.into_boxed_str()))
+}
+
+#[cfg(feature = "gpu")]
+fn unwrap_gpu_image(image: Arc<DeviceImage>) -> Result<GpuImageWithRegion> {
+    match Arc::try_unwrap(image) {
+        Ok(DeviceImage::Gpu(gpu)) => Ok(gpu),
+        Ok(DeviceImage::Cpu(_)) => Err(gpu_error("expected GPU image".into())),
+        Err(arc) => match arc.as_ref() {
+            DeviceImage::Gpu(gpu) => gpu.try_clone().map_err(|e| gpu_error(format!("{e:?}"))),
+            DeviceImage::Cpu(_) => Err(gpu_error("expected GPU image".into())),
+        },
+    }
 }
 
 pub fn read_pass_group_on_gpu(_group_idx: u32, _pass_idx: u32) {
@@ -125,11 +148,92 @@ pub fn run_blend_on_gpu(
 }
 
 pub fn run_xyb2rgb_on_gpu(
-    _ctx: &RenderContext,
-    _frame: &IndexedFrame,
-    _grid: Arc<DeviceImage>,
+    ctx: &RenderContext,
+    frame: &IndexedFrame,
+    grid: Arc<DeviceImage>,
 ) -> Result<Arc<DeviceImage>> {
-    gpu_unimplemented!("run_xyb2rgb");
+    #[cfg(feature = "gpu")]
+    {
+        if grid.as_ref().ct_done() {
+            let _materialize = crate::phase_guard!("xyb2rgb_gpu_materialize");
+            return materialize_on_gpu(grid).map_err(gpu_error);
+        }
+
+        let frame_header = frame.header();
+        let metadata = ctx.image_metadata();
+        let bit_depth = metadata.bit_depth;
+        let materialized = {
+            let _materialize = crate::phase_guard!("xyb2rgb_gpu_materialize");
+            materialize_on_gpu(grid).map_err(gpu_error)?
+        };
+        let mut working = {
+            let _acquire = crate::phase_guard!("xyb2rgb_gpu_acquire");
+            unwrap_gpu_image(materialized)?
+        };
+
+        if frame_header.do_ycbcr {
+            let _ycbcr = crate::phase_guard!("xyb2rgb_gpu_ycbcr");
+            working.convert_modular_color(bit_depth)?;
+            dispatch_ycbcr_to_rgb(&mut working).map_err(gpu_error)?;
+        }
+
+        let transform_noop = ctx.color_transform_is_noop()?;
+        if transform_noop && !frame_header.do_ycbcr {
+            working.set_ct_done(true);
+            return Ok(Arc::new(DeviceImage::Gpu(working)));
+        }
+
+        if transform_noop {
+            let output_channels = ctx.color_transform_output_channels()?;
+            working.remove_color_channels(output_channels);
+            working.set_ct_done(true);
+            return Ok(Arc::new(DeviceImage::Gpu(working)));
+        }
+
+        let encoded_color_channels = frame_header.encoded_color_channels();
+        {
+            let _prepare = crate::phase_guard!("xyb2rgb_gpu_prepare");
+            if encoded_color_channels < 3 {
+                working.clone_gray()?;
+            }
+
+            working.convert_modular_color(bit_depth)?;
+
+            let mut has_black = false;
+            for (ec_idx, ec_info) in metadata.ec_info.iter().enumerate() {
+                if ec_info.is_black() {
+                    let buf_idx = 3 + ec_idx;
+                    working.convert_channel_to_float(buf_idx, ec_info.bit_depth)?;
+                    has_black = true;
+                    break;
+                }
+            }
+
+            if has_black {
+                dispatch_invert_channels(&mut working).map_err(gpu_error)?;
+            }
+        }
+
+        let plan = build_gpu_plan(ctx).map_err(|e| match e {
+            jxl_color::GpuTransformUnsupported::IccToIcc => {
+                gpu_error("ICC transform on GPU".into())
+            }
+        })?;
+        let output_channels = {
+            let _transform = crate::phase_guard!("xyb2rgb_gpu_transform");
+            run_gpu_plan(&plan, &mut working).map_err(gpu_error)?
+        };
+        if output_channels < 3 {
+            working.remove_color_channels(output_channels);
+        }
+        working.set_ct_done(true);
+        Ok(Arc::new(DeviceImage::Gpu(working)))
+    }
+    #[cfg(not(feature = "gpu"))]
+    {
+        let _ = (ctx, frame, grid);
+        gpu_unimplemented!("run_xyb2rgb");
+    }
 }
 
 /// GPU-only export: reads GPU-resident channel buffers and writes interleaved HWC output.
@@ -491,9 +595,180 @@ pub fn build_low_frequency_image_on_gpu(_low_frequency_image: GpuImageWithRegion
 }
 
 pub fn fuse_spot_colors_on_gpu(
-    _image: Arc<DeviceImage>,
-    _color_bit_depth: BitDepth,
-    _extra_channels: &[(jxl_image::ExtraChannelType, BitDepth)],
+    image: Arc<DeviceImage>,
+    color_bit_depth: BitDepth,
+    extra_channels: &[(jxl_image::ExtraChannelType, BitDepth)],
 ) -> Result<(Arc<DeviceImage>, bool)> {
-    gpu_unimplemented!("fuse_spot_colors");
+    #[cfg(feature = "gpu")]
+    {
+        use jxl_image::ExtraChannelType;
+
+        let color_channels = image.color_channels();
+        if color_channels != 3 {
+            return Ok((image, false));
+        }
+        let has_spots = extra_channels
+            .iter()
+            .any(|(ec, _)| matches!(ec, ExtraChannelType::SpotColour { .. }));
+        if !has_spots {
+            return Ok((image, false));
+        }
+
+        let materialized = materialize_on_gpu(image).map_err(gpu_error)?;
+        let mut gpu_image = unwrap_gpu_image(materialized)?;
+        gpu_image.convert_modular_color(color_bit_depth)?;
+
+        for (ec_idx, (ec_ty, ec_bit_depth)) in extra_channels.iter().enumerate() {
+            let ExtraChannelType::SpotColour {
+                red,
+                green,
+                blue,
+                solidity,
+            } = ec_ty
+            else {
+                continue;
+            };
+            let spot_buf_idx = color_channels + ec_idx;
+            gpu_image.convert_channel_to_float(spot_buf_idx, *ec_bit_depth)?;
+            dispatch_fuse_spot(
+                &mut gpu_image,
+                spot_buf_idx,
+                (*red, *green, *blue),
+                *solidity,
+            )
+            .map_err(gpu_error)?;
+        }
+
+        Ok((Arc::new(DeviceImage::Gpu(gpu_image)), true))
+    }
+    #[cfg(not(feature = "gpu"))]
+    {
+        let _ = (image, color_bit_depth, extra_channels);
+        gpu_unimplemented!("fuse_spot_colors");
+    }
+}
+
+#[cfg(feature = "gpu")]
+fn dispatch_fuse_spot(
+    image: &mut GpuImageWithRegion,
+    spot_idx: usize,
+    rgb: (f32, f32, f32),
+    solidity: f32,
+) -> std::result::Result<(), String> {
+    use std::sync::OnceLock;
+
+    use wgpu::util::DeviceExt;
+
+    use super::pipeline::{
+        compute_pipeline, dispatch_2d, storage_read_layout, storage_rw_layout, uniform_layout,
+    };
+
+    const FUSE_WGSL: &str = include_str!("shaders/fuse_spot.wgsl");
+
+    static PIPE: OnceLock<Option<super::pipeline::ComputePipeline>> = OnceLock::new();
+
+    let ctx = GpuContext::get().ok_or_else(|| "GPU device unavailable".to_string())?;
+    let bufs = image.buffer();
+    if bufs.len() <= spot_idx || spot_idx < 3 {
+        return Err("invalid spot buffer index".to_string());
+    }
+    let width = bufs[0].width() as u32;
+    let height = bufs[0].height() as u32;
+
+    #[repr(C)]
+    #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+    struct FuseSpotParams {
+        width: u32,
+        height: u32,
+        spot_r: f32,
+        spot_g: f32,
+        spot_b: f32,
+        solidity: f32,
+    }
+
+    let params = FuseSpotParams {
+        width,
+        height,
+        spot_r: rgb.0,
+        spot_g: rgb.1,
+        spot_b: rgb.2,
+        solidity,
+    };
+
+    let pipe = compute_pipeline(
+        ctx,
+        &PIPE,
+        "jxlit_fuse_spot",
+        FUSE_WGSL,
+        "main",
+        &[
+            uniform_layout(0),
+            storage_rw_layout(1),
+            storage_rw_layout(2),
+            storage_rw_layout(3),
+            storage_read_layout(4),
+        ],
+    );
+
+    let uniform_buf = ctx
+        .device
+        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("fuse_spot_params"),
+            contents: bytemuck::bytes_of(&params),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+    let bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("fuse_spot"),
+        layout: &pipe.bind_group_layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: uniform_buf.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: match &bufs[0] {
+                    super::image::GpuImageBuffer::F32 { buffer, .. } => buffer.as_entire_binding(),
+                    _ => panic!("expected F32"),
+                },
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: match &bufs[1] {
+                    super::image::GpuImageBuffer::F32 { buffer, .. } => buffer.as_entire_binding(),
+                    _ => panic!("expected F32"),
+                },
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: match &bufs[2] {
+                    super::image::GpuImageBuffer::F32 { buffer, .. } => buffer.as_entire_binding(),
+                    _ => panic!("expected F32"),
+                },
+            },
+            wgpu::BindGroupEntry {
+                binding: 4,
+                resource: match &bufs[spot_idx] {
+                    super::image::GpuImageBuffer::F32 { buffer, .. } => buffer.as_entire_binding(),
+                    _ => panic!("expected F32"),
+                },
+            },
+        ],
+    });
+    let mut encoder = ctx
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("fuse_spot"),
+        });
+    {
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("fuse_spot"),
+            timestamp_writes: None,
+        });
+        pass.set_pipeline(&pipe.pipeline);
+        pass.set_bind_group(0, &bind_group, &[]);
+        dispatch_2d(ctx, width, height, &mut pass);
+    }
+    ctx.queue.submit(std::iter::once(encoder.finish()));
+    Ok(())
 }

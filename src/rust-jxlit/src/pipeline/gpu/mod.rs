@@ -6,11 +6,28 @@
 #![allow(dead_code)]
 
 pub mod availability;
+#[cfg(feature = "gpu")]
+pub mod color_transform;
+#[cfg(not(feature = "gpu"))]
+pub mod color_transform {
+    use crate::vendor::jxl_render::RenderContext;
+    use jxl_color::{ColorTransformGpuOp, GpuTransformUnsupported};
+
+    pub fn build_gpu_plan(
+        _ctx: &RenderContext,
+    ) -> Result<Vec<ColorTransformGpuOp>, GpuTransformUnsupported> {
+        Err(GpuTransformUnsupported::IccToIcc)
+    }
+}
 pub mod context;
 pub mod device;
 pub mod environment;
 pub mod image;
 pub mod kernels;
+#[cfg(feature = "gpu")]
+pub mod modular;
+#[cfg(feature = "gpu")]
+pub mod pipeline;
 pub mod transfer;
 
 pub use context::GpuPixelBuffer;

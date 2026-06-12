@@ -1077,6 +1077,31 @@ impl RenderContext {
             Arc::clone(handle).run_with_image()?.blend(None, &self.pool)
         }
     }
+
+    pub(crate) fn ensure_color_transform_cached(&self) -> Result<()> {
+        self.cache_color_transform()
+    }
+
+    pub(crate) fn with_cached_transform<R>(
+        &self,
+        f: impl FnOnce(&ColorTransform) -> R,
+    ) -> Result<R> {
+        self.cache_color_transform()?;
+        let guard = self.cached_transform.lock().unwrap();
+        Ok(f(guard.as_ref().unwrap()))
+    }
+
+    pub(crate) fn color_transform_is_noop(&self) -> Result<bool> {
+        self.with_cached_transform(|t| t.is_noop())
+    }
+
+    pub(crate) fn color_transform_output_channels(&self) -> Result<usize> {
+        self.with_cached_transform(|t| t.output_channels())
+    }
+
+    pub(crate) fn image_metadata(&self) -> &ImageMetadata {
+        self.metadata()
+    }
 }
 
 /// Frame with its index in the image.
