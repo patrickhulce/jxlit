@@ -13,7 +13,7 @@ use super::environment::GpuEnvironment;
 use crate::vendor::jxl_frame::FrameHeader;
 use crate::vendor::jxl_frame::data::GlobalModular;
 use crate::vendor::jxl_frame::header::Encoding;
-use crate::vendor::jxl_render::{ImageBuffer, ImageWithRegion, Region, Result};
+use crate::vendor::jxl_render::{Error, ImageBuffer, ImageWithRegion, Region, Result};
 
 use super::image::{GpuImageWithRegion, GpuMutableSubgrid, alloc_coefficient_buffer};
 
@@ -184,7 +184,18 @@ impl DeviceImage {
     pub fn ensure_cpu(&mut self) -> Result<&mut ImageWithRegion> {
         match self {
             Self::Cpu(image) => Ok(image),
-            Self::Gpu(_) => unimplemented!("GPU path not implemented: download image"),
+            Self::Gpu(gpu) => {
+                let cpu = gpu.to_cpu().map_err(|e| {
+                    Error::NotSupported(Box::leak(
+                        format!("GPU download failed: {e}").into_boxed_str(),
+                    ))
+                })?;
+                *self = Self::Cpu(cpu);
+                match self {
+                    Self::Cpu(image) => Ok(image),
+                    Self::Gpu(_) => unreachable!(),
+                }
+            }
         }
     }
 }

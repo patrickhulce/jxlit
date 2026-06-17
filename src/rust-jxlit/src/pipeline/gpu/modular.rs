@@ -6,14 +6,13 @@ use std::sync::OnceLock;
 
 use jxl_image::BitDepth;
 
-use wgpu::util::DeviceExt;
-
 use super::context::GpuContext;
 use super::image::{GpuImageBuffer, GpuSampleKind, sample_kind_bits};
 use super::pipeline::{
     ComputePipeline, compute_pipeline, dispatch_2d, storage_read_layout, storage_rw_layout,
     uniform_layout,
 };
+use super::transfer::upload_buffer_init;
 
 const MODULAR_WGSL: &str = include_str!("shaders/modular_to_float.wgsl");
 
@@ -63,13 +62,11 @@ pub fn dispatch_modular_to_float(
         bits_per_sample: bits,
     };
     let pipe = modular_pipeline();
-    let uniform_buf = ctx
-        .device
-        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("modular_params"),
-            contents: bytemuck::bytes_of(&params),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
+    let uniform_buf = upload_buffer_init(
+        "modular_params",
+        bytemuck::bytes_of(&params),
+        wgpu::BufferUsages::UNIFORM,
+    );
     let bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("modular_to_float"),
         layout: &pipe.bind_group_layout,

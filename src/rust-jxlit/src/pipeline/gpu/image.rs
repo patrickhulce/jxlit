@@ -398,6 +398,7 @@ impl GpuImageWithRegion {
     pub fn from_cpu(cpu: &ImageWithRegion) -> std::result::Result<Self, String> {
         #[cfg(feature = "gpu")]
         {
+            let _guard = crate::phase_guard!("gpu_htod_image");
             let ctx = GpuContext::get().ok_or_else(|| "GPU device unavailable".to_string())?;
             let mut gpu = Self::new(cpu.color_channels(), cpu.alloc_tracker());
             for (buf, (region, shift)) in cpu.buffer().iter().zip(cpu.regions_and_shifts()) {
@@ -420,7 +421,7 @@ impl GpuImageWithRegion {
             use crate::vendor::jxl_render::ImageBuffer;
             use jxl_grid::AlignedGrid;
 
-            let ctx = GpuContext::get().ok_or_else(|| "GPU device unavailable".to_string())?;
+            let _guard = crate::phase_guard!("gpu_dtoh_image");
             let mut cpu = ImageWithRegion::new(self.color_channels, self.tracker.as_ref());
             cpu.set_ct_done(self.ct_done);
             for (gpu_buf, (region, shift)) in self.buffer.iter().zip(self.regions.iter()) {
@@ -431,28 +432,10 @@ impl GpuImageWithRegion {
                     GpuSampleKind::F32 | GpuSampleKind::I32 => len * 4,
                     GpuSampleKind::I16 => len * 2,
                 };
-                let staging = ctx.device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("jxlit_download_staging"),
-                    size: byte_len.max(4) as u64,
-                    usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-                    mapped_at_creation: false,
-                });
-                let mut encoder =
-                    ctx.device
-                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                            label: Some("download_image"),
-                        });
-                encoder.copy_buffer_to_buffer(
+                let data = super::transfer::download_buffer_bytes_untimed(
                     gpu_buf.wgpu_buffer(),
-                    0,
-                    &staging,
-                    0,
-                    byte_len as u64,
-                );
-                ctx.queue.submit(std::iter::once(encoder.finish()));
-                staging.slice(..).map_async(wgpu::MapMode::Read, |_| {});
-                ctx.device.poll(wgpu::Maintain::Wait);
-                let data = staging.slice(..).get_mapped_range();
+                    byte_len,
+                )?;
                 let image_buf = match gpu_buf.sample_kind() {
                     GpuSampleKind::F32 => {
                         let mut grid =
@@ -476,8 +459,6 @@ impl GpuImageWithRegion {
                         ImageBuffer::I16(grid)
                     }
                 };
-                drop(data);
-                staging.unmap();
                 cpu.append_channel_shifted(image_buf, *region, *shift);
             }
             Ok(cpu)

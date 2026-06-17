@@ -631,6 +631,105 @@ fn blend_crop_gpu_matches_cpu() {
 }
 
 #[cfg(feature = "gpu")]
+fn fixture_frame_header(
+    name: &str,
+) -> (
+    std::sync::Arc<jxl_image::ImageHeader>,
+    crate::vendor::jxl_frame::FrameHeader,
+) {
+    use jxl_bitstream::Bitstream;
+    use jxl_oxide_common::Bundle;
+    use jxl_threadpool::JxlThreadPool;
+
+    use crate::vendor::jxl_frame::FrameHeader;
+
+    let bytes = fs::read(assets_dir().join(name)).expect("read jxl fixture");
+    let codestream =
+        crate::pipeline::parse::container::read_codestream(&bytes).expect("read codestream");
+    let decl = crate::pipeline::parse::container::read_header(&codestream, JxlThreadPool::none())
+        .expect("read header");
+    let mut bitstream = Bitstream::new(&codestream[decl.offset..]);
+    let frame_header =
+        FrameHeader::parse(&mut bitstream, &decl.image_header).expect("parse frame header");
+    (decl.image_header, frame_header)
+}
+
+#[cfg(feature = "gpu")]
+#[test]
+fn features_noise_gpu_matches_cpu() {
+    if !GpuEnvironment::current().device_available {
+        eprintln!("skipping features_noise_gpu_matches_cpu: no GPU adapter");
+        return;
+    }
+
+    use jxl_grid::AlignedGrid;
+    use jxl_modular::ChannelShift;
+    use jxl_threadpool::JxlThreadPool;
+
+    use crate::pipeline::gpu::{GpuImageWithRegion, noise::dispatch_noise_for_test};
+    use crate::vendor::jxl_frame::data::NoiseParameters;
+    use crate::vendor::jxl_render::{ImageBuffer, ImageWithRegion, Region, features::render_noise};
+
+    const W: u32 = 64;
+    const H: u32 = 64;
+    let (_image_header, mut frame_header) = fixture_frame_header("colors_e1_d0p5_fd4.jxl");
+    frame_header.width = W;
+    frame_header.height = H;
+
+    let region = Region::with_size(W, H);
+    let make_image = || -> ImageWithRegion {
+        let mut image = ImageWithRegion::new(3, None);
+        for ch in 0..3 {
+            let mut grid =
+                AlignedGrid::with_alloc_tracker(W as usize, H as usize, None).expect("grid");
+            for (i, v) in grid.buf_mut().iter_mut().enumerate() {
+                *v = ((i % W as usize) as f32 + 1.0) / W as f32 * ((i / W as usize) as f32 + 1.0)
+                    / H as f32
+                    + ch as f32 * 0.01;
+            }
+            image.append_channel_shifted(
+                ImageBuffer::F32(grid),
+                region,
+                ChannelShift::from_shift(0),
+            );
+        }
+        image
+    };
+
+    let noise_params = NoiseParameters {
+        lut: std::array::from_fn(|i| (i as f32 + 1.0) / 9.0),
+    };
+    let base_corr = Some((0.1, 0.9));
+
+    let mut cpu_image = make_image();
+    render_noise(
+        &frame_header,
+        2,
+        1,
+        base_corr,
+        &mut cpu_image,
+        &noise_params,
+        &JxlThreadPool::none(),
+    )
+    .expect("cpu noise");
+
+    let mut gpu_image = make_image();
+    let mut gpu = GpuImageWithRegion::from_cpu(&gpu_image).expect("upload");
+    gpu.convert_modular_color(_image_header.metadata.bit_depth)
+        .expect("convert");
+    dispatch_noise_for_test(&mut gpu, &frame_header, &noise_params, 2, 1, base_corr)
+        .expect("gpu noise");
+    gpu_image = gpu.to_cpu().expect("download");
+
+    for ch in 0..3 {
+        let cpu_buf = cpu_image.buffer()[ch].as_float().expect("f32").buf();
+        let gpu_buf = gpu_image.buffer()[ch].as_float().expect("f32").buf();
+        let mae = mean_abs_error(gpu_buf, cpu_buf);
+        assert!(mae < 0.05, "noise channel {ch} MAE {mae}");
+    }
+}
+
+#[cfg(feature = "gpu")]
 #[test]
 fn decode_gpu_up2_fixture_matches_cpu_pixels() {
     if !GpuEnvironment::current().device_available {

@@ -11,13 +11,13 @@ use jxl_color::{
 
 use crate::vendor::jxl_render::RenderContext;
 use jxl_image::ImageHeader;
-use wgpu::util::DeviceExt;
 
 use super::context::GpuContext;
 use super::image::{GpuImageBuffer, GpuImageWithRegion, GpuSampleKind};
 use super::pipeline::{
     ComputePipeline, compute_pipeline, dispatch_2d, storage_rw_layout, uniform_layout,
 };
+use super::transfer::{download_buffer_f32, upload_buffer_init};
 
 const COLOR_OPS_WGSL: &str = include_str!("shaders/color_ops.wgsl");
 
@@ -214,13 +214,7 @@ fn channel_view(image: &GpuImageWithRegion, count: usize) -> Result<ChannelView,
 fn run_pass(entry: &'static str, uniform: &[u8], view: &ChannelView) {
     let ctx = GpuContext::get().expect("GPU context required");
     let pipe = color_ops_pipeline(entry);
-    let uniform_buf = ctx
-        .device
-        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some(entry),
-            contents: uniform,
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
+    let uniform_buf = upload_buffer_init(entry, uniform, wgpu::BufferUsages::UNIFORM);
     let bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some(entry),
         layout: &pipe.bind_group_layout,
@@ -272,26 +266,7 @@ fn tf_kind(tf: TransferFunction) -> (u32, f32) {
 }
 
 fn download_f32_channel(buf: &Arc<wgpu::Buffer>, len: usize) -> Vec<f32> {
-    let ctx = GpuContext::get().expect("GPU context");
-    let byte_len = len * 4;
-    let staging = ctx.device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("download_channel"),
-        size: byte_len as u64,
-        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
-    let mut encoder = ctx
-        .device
-        .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-    encoder.copy_buffer_to_buffer(buf, 0, &staging, 0, byte_len as u64);
-    ctx.queue.submit(std::iter::once(encoder.finish()));
-    staging.slice(..).map_async(wgpu::MapMode::Read, |_| {});
-    ctx.device.poll(wgpu::Maintain::Wait);
-    let data = staging.slice(..).get_mapped_range();
-    let out = bytemuck::cast_slice::<u8, f32>(&data).to_vec();
-    drop(data);
-    staging.unmap();
-    out
+    download_buffer_f32(buf, len).expect("GPU channel download")
 }
 
 fn detect_peak_luminance_cpu(view: &ChannelView, luminances: [f32; 3]) -> f32 {

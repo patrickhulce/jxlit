@@ -29,6 +29,10 @@ pub fn run_features<S: Sample>(
     options: &DecodeOptions,
     env: GpuEnvironment,
 ) -> Result<()> {
+    if !availability::features_work_needed(grid, low_frequency_global) {
+        return Ok(());
+    }
+
     if availability::run_features_available(
         frame,
         grid,

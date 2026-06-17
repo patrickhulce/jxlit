@@ -35,6 +35,8 @@ use super::image::GpuImageWithRegion;
 #[cfg(feature = "gpu")]
 use super::image::sample_kind_bits;
 #[cfg(feature = "gpu")]
+use super::noise::dispatch_noise;
+#[cfg(feature = "gpu")]
 use super::upsample::upsample_nonseparable;
 
 macro_rules! gpu_unimplemented {
@@ -106,16 +108,95 @@ pub fn run_loop_filters_on_gpu<S: Sample>(
 }
 
 pub fn run_features_on_gpu<S: Sample>(
-    _frame: &IndexedFrame,
-    _grid: &mut DeviceImage,
+    frame: &IndexedFrame,
+    grid: &mut DeviceImage,
     _upsampling_valid_region: Region,
     _reference_grids: [Option<Reference<S>>; 4],
-    _low_frequency_global: Option<&LfGlobal<S>>,
-    _visible_frames_num: usize,
-    _invisible_frames_num: usize,
+    low_frequency_global: Option<&LfGlobal<S>>,
+    visible_frames_num: usize,
+    invisible_frames_num: usize,
     _pool: &JxlThreadPool,
 ) -> Result<()> {
-    gpu_unimplemented!("run_features");
+    #[cfg(feature = "gpu")]
+    {
+        let image_header = frame.image_header();
+        let bit_depth = image_header.metadata.bit_depth;
+
+        match grid {
+            DeviceImage::Gpu(gpu) => run_features_on_gpu_image(
+                frame,
+                gpu,
+                low_frequency_global,
+                visible_frames_num,
+                invisible_frames_num,
+                bit_depth,
+            ),
+            DeviceImage::Cpu(cpu) => {
+                let mut gpu =
+                    GpuImageWithRegion::from_cpu(cpu).map_err(|e| gpu_error(e.to_string()))?;
+                run_features_on_gpu_image(
+                    frame,
+                    &mut gpu,
+                    low_frequency_global,
+                    visible_frames_num,
+                    invisible_frames_num,
+                    bit_depth,
+                )?;
+                *grid = DeviceImage::Gpu(gpu);
+                Ok(())
+            }
+        }
+    }
+    #[cfg(not(feature = "gpu"))]
+    {
+        let _ = (
+            frame,
+            grid,
+            low_frequency_global,
+            visible_frames_num,
+            invisible_frames_num,
+            _pool,
+        );
+        gpu_unimplemented!("run_features");
+    }
+}
+
+#[cfg(feature = "gpu")]
+fn run_features_on_gpu_image<S: Sample>(
+    frame: &IndexedFrame,
+    gpu_image: &mut GpuImageWithRegion,
+    low_frequency_global: Option<&LfGlobal<S>>,
+    visible_frames_num: usize,
+    invisible_frames_num: usize,
+    bit_depth: BitDepth,
+) -> Result<()> {
+    let Some(low_frequency_global) = low_frequency_global else {
+        return Ok(());
+    };
+
+    let base_correlations_xb = low_frequency_global.vardct.as_ref().map(|x| {
+        (
+            x.lf_chan_corr.base_correlation_x,
+            x.lf_chan_corr.base_correlation_b,
+        )
+    });
+
+    if let Some(noise) = &low_frequency_global.noise
+        && gpu_image.color_channels() == 3
+    {
+        let _noise = crate::phase_guard!("features_gpu_noise");
+        gpu_image.convert_modular_color(bit_depth)?;
+        dispatch_noise(
+            gpu_image,
+            frame.header(),
+            noise,
+            visible_frames_num,
+            invisible_frames_num,
+            base_correlations_xb,
+        )?;
+    }
+
+    Ok(())
 }
 
 pub fn run_jpeg_upsample_on_gpu(
@@ -456,7 +537,7 @@ struct ExportPipeline {
 }
 
 #[cfg(feature = "gpu")]
-use wgpu::util::DeviceExt;
+use super::transfer::upload_buffer_init;
 
 #[cfg(feature = "gpu")]
 fn export_pipeline(ctx: &GpuContext) -> &'static ExportPipeline {
@@ -599,13 +680,11 @@ fn run_export_on_gpu(
             pixel_layout: layout_flag,
             plane_size: plane_size as u32,
         };
-        let params_buffer = ctx
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("jxlit_export_params"),
-                contents: bytemuck::bytes_of(&params),
-                usage: wgpu::BufferUsages::UNIFORM,
-            });
+        let params_buffer = upload_buffer_init(
+            "jxlit_export_params",
+            bytemuck::bytes_of(&params),
+            wgpu::BufferUsages::UNIFORM,
+        );
 
         let mut metas = [ChannelMeta {
             offset_x: 0,
@@ -645,13 +724,11 @@ fn run_export_on_gpu(
             mapped_at_creation: false,
         });
 
-        let meta_buffer = ctx
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("jxlit_export_meta"),
-                contents: bytemuck::cast_slice(&metas),
-                usage: wgpu::BufferUsages::STORAGE,
-            });
+        let meta_buffer = upload_buffer_init(
+            "jxlit_export_meta",
+            bytemuck::cast_slice(&metas),
+            wgpu::BufferUsages::STORAGE,
+        );
 
         let output_buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("jxlit_export_output"),
@@ -797,11 +874,10 @@ fn dispatch_fuse_spot(
 ) -> std::result::Result<(), String> {
     use std::sync::OnceLock;
 
-    use wgpu::util::DeviceExt;
-
     use super::pipeline::{
         compute_pipeline, dispatch_2d, storage_read_layout, storage_rw_layout, uniform_layout,
     };
+    use super::transfer::upload_buffer_init;
 
     const FUSE_WGSL: &str = include_str!("shaders/fuse_spot.wgsl");
 
@@ -850,13 +926,11 @@ fn dispatch_fuse_spot(
         ],
     );
 
-    let uniform_buf = ctx
-        .device
-        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("fuse_spot_params"),
-            contents: bytemuck::bytes_of(&params),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
+    let uniform_buf = upload_buffer_init(
+        "fuse_spot_params",
+        bytemuck::bytes_of(&params),
+        wgpu::BufferUsages::UNIFORM,
+    );
     let bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("fuse_spot"),
         layout: &pipe.bind_group_layout,

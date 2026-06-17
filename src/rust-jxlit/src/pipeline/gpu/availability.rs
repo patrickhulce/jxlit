@@ -20,10 +20,43 @@ use crate::vendor::jxl_render::{IndexedFrame, Reference, Region, RenderContext};
 use crate::vendor::jxl_vardct::LfChannelCorrelation;
 use jxl_grid::SharedSubgrid;
 use jxl_image::{BitDepth, ExtraChannelType, ImageHeader};
-use jxl_modular::Sample;
+use jxl_modular::{ChannelShift, Sample};
 
 use super::device::{DeviceCoefficients, DeviceImage};
 use super::environment::GpuEnvironment;
+
+/// Whether the features post-decode step has any work (patches, splines, or noise).
+pub fn features_work_needed<S: Sample>(
+    grid: &DeviceImage,
+    low_frequency_global: Option<&LfGlobal<S>>,
+) -> bool {
+    let Some(lfg) = low_frequency_global else {
+        return false;
+    };
+    if lfg.patches.is_some() {
+        return true;
+    }
+    if grid.color_channels() == 3 && (lfg.splines.is_some() || lfg.noise.is_some()) {
+        return true;
+    }
+    false
+}
+
+/// Whether any channel still needs non-separable upsampling.
+pub fn nonseparable_upsample_needed(
+    fb: &DeviceImage,
+    frame_header: &FrameHeader,
+    ec_to_color_only: bool,
+) -> bool {
+    let color_shift = frame_header.upsampling.trailing_zeros();
+    let target_factor = if ec_to_color_only { color_shift } else { 0 };
+    fb.regions_and_shifts()
+        .iter()
+        .any(|(_, shift)| match shift {
+            ChannelShift::Shifts(upsampling_factor) => *upsampling_factor != target_factor,
+            _ => true,
+        })
+}
 
 pub fn read_pass_group_available(
     _frame_header: &FrameHeader,
@@ -106,13 +139,32 @@ pub fn run_features_available<S: Sample>(
     _grid: &DeviceImage,
     _upsampling_valid_region: Region,
     _reference_grids: [Option<Reference<S>>; 4],
-    _low_frequency_global: Option<&LfGlobal<S>>,
+    low_frequency_global: Option<&LfGlobal<S>>,
     _visible_frames_num: usize,
     _invisible_frames_num: usize,
-    _options: &DecodeOptions,
-    _env: GpuEnvironment,
+    options: &DecodeOptions,
+    env: GpuEnvironment,
 ) -> bool {
-    false
+    #[cfg(feature = "gpu")]
+    {
+        if !gpu_hardware_available(options, env) {
+            return false;
+        }
+        match low_frequency_global {
+            None => false,
+            Some(lfg) => {
+                lfg.patches.is_none()
+                    && lfg.splines.is_none()
+                    && lfg.noise.is_some()
+                    && _grid.color_channels() == 3
+            }
+        }
+    }
+    #[cfg(not(feature = "gpu"))]
+    {
+        let _ = (low_frequency_global, options, env);
+        false
+    }
 }
 
 pub fn run_jpeg_upsample_available(
@@ -126,7 +178,7 @@ pub fn run_jpeg_upsample_available(
 }
 
 pub fn run_nonseparable_upsample_available(
-    _fb: &DeviceImage,
+    fb: &DeviceImage,
     _image_header: &ImageHeader,
     frame_header: &FrameHeader,
     _region: Region,
@@ -135,7 +187,8 @@ pub fn run_nonseparable_upsample_available(
 ) -> bool {
     #[cfg(feature = "gpu")]
     {
-        gpu_hardware_available(options, env) && frame_header.upsampling != 1
+        gpu_hardware_available(options, env)
+            && nonseparable_upsample_needed(fb, frame_header, false)
     }
     #[cfg(not(feature = "gpu"))]
     {

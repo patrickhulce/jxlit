@@ -4,14 +4,13 @@
 
 use std::sync::OnceLock;
 
-use wgpu::util::DeviceExt;
-
 use super::context::GpuContext;
 use super::image::GpuImageBuffer;
 use super::pipeline::{
     ComputePipeline, compute_pipeline, dispatch_2d, storage_read_layout, storage_rw_layout,
     uniform_layout,
 };
+use super::transfer::upload_buffer_init;
 
 const CROP_WGSL: &str = include_str!("shaders/crop.wgsl");
 
@@ -71,13 +70,11 @@ pub fn dispatch_crop_f32(
         off_y,
     };
     let pipe = crop_pipeline();
-    let uniform_buf = ctx
-        .device
-        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("crop_params"),
-            contents: bytemuck::bytes_of(&params),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
+    let uniform_buf = upload_buffer_init(
+        "crop_params",
+        bytemuck::bytes_of(&params),
+        wgpu::BufferUsages::UNIFORM,
+    );
     let bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("crop"),
         layout: &pipe.bind_group_layout,

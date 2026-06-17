@@ -29,6 +29,8 @@ pub mod kernels;
 #[cfg(feature = "gpu")]
 pub mod modular;
 #[cfg(feature = "gpu")]
+pub mod noise;
+#[cfg(feature = "gpu")]
 pub mod pipeline;
 pub mod transfer;
 #[cfg(feature = "gpu")]

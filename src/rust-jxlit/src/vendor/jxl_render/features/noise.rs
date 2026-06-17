@@ -89,6 +89,16 @@ pub fn render_noise(
     Ok(())
 }
 
+/// Synthesizes the convolved XYB noise grids for GPU apply.
+pub fn synthesize_noise(
+    visible_frames: usize,
+    invisible_frames: usize,
+    header: &FrameHeader,
+    pool: &JxlThreadPool,
+) -> Result<[AlignedGrid<f32>; 3]> {
+    init_noise(visible_frames, invisible_frames, header, None, pool)
+}
+
 fn init_noise(
     visible_frames: usize,
     invisible_frames: usize,

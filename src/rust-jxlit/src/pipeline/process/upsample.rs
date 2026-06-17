@@ -35,6 +35,10 @@ pub fn run_nonseparable_upsample(
     options: &DecodeOptions,
     env: GpuEnvironment,
 ) -> Result<()> {
+    if !availability::nonseparable_upsample_needed(fb, frame_header, false) {
+        return Ok(());
+    }
+
     if availability::run_nonseparable_upsample_available(
         fb,
         image_header,

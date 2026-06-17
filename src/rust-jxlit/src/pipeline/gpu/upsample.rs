@@ -6,7 +6,6 @@ use std::sync::OnceLock;
 
 use jxl_image::ImageHeader;
 use jxl_modular::ChannelShift;
-use wgpu::util::DeviceExt;
 
 use crate::vendor::jxl_frame::FrameHeader;
 use crate::vendor::jxl_render::Region;
@@ -18,6 +17,7 @@ use super::pipeline::{
     ComputePipeline, compute_pipeline, dispatch_2d, storage_read_layout, storage_rw_layout,
     uniform_layout,
 };
+use super::transfer::upload_buffer_init;
 
 const UPSAMPLE_WGSL: &str = include_str!("shaders/nonseparable_upsample.wgsl");
 
@@ -95,20 +95,16 @@ fn dispatch_upsample_pass(
         out_width,
         out_height,
     };
-    let weights_buf = ctx
-        .device
-        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("upsample_weights"),
-            contents: bytemuck::cast_slice(weights),
-            usage: wgpu::BufferUsages::STORAGE,
-        });
-    let uniform_buf = ctx
-        .device
-        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("upsample_params"),
-            contents: bytemuck::bytes_of(&params),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
+    let weights_buf = upload_buffer_init(
+        "upsample_weights",
+        bytemuck::cast_slice(weights),
+        wgpu::BufferUsages::STORAGE,
+    );
+    let uniform_buf = upload_buffer_init(
+        "upsample_params",
+        bytemuck::bytes_of(&params),
+        wgpu::BufferUsages::UNIFORM,
+    );
     let pipe = upsample_pipeline();
     let bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("nonseparable_upsample"),
