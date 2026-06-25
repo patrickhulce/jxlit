@@ -22,6 +22,7 @@ manifest-path = "Cargo.toml"
 
 [dependency-groups]
 dev = [
+    "maturin>=1.7,<2.0",
     "mypy>=1.0",
     "pillow>=11.0",
     "pytest>=8.0",
@@ -37,6 +38,9 @@ select = ["E", "F", "I", "UP", "B"]
 [tool.mypy]
 python_version = "3.10"
 strict = true
+
+[tool.uv]
+index-url = "https://pypi.org/simple"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
