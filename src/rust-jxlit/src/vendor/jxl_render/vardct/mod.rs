@@ -528,19 +528,111 @@ pub fn dequant_hf_varblock_grouped<S: Sample>(
                     .subgrid(left..(left + width), top..(top + height));
                 for (y, matrix_row) in matrix.chunks_exact(width).enumerate() {
                     let row = coeff.get_row_mut(y);
-                    for (q, &m) in row.iter_mut().zip(matrix_row) {
-                        let qn = q.to_bits() as i32;
-                        *q = qn as f32;
-                        if q.abs() <= 1.0 {
-                            *q *= quant_bias;
-                        } else {
-                            *q -= quant_bias_numerator / *q;
-                        }
-                        *q *= m;
-                        *q *= mul;
-                    }
+                    dequant_hf_row(row, matrix_row, quant_bias, quant_bias_numerator, mul);
                 }
             },
+        );
+    }
+}
+
+/// Dequantizes one coefficient row in place.
+///
+/// Each slot in `row` holds the quantized integer reinterpreted into the f32's
+/// bit pattern. Applies libjxl's adaptive quant bias, the per-coefficient
+/// dequant `matrix_row`, and the block multiplier `mul`. jxlit-native NEON path
+/// (the upstream jxl-oxide version is a scalar per-coefficient loop); other
+/// targets use the scalar fallback.
+#[inline]
+fn dequant_hf_row(
+    row: &mut [f32],
+    matrix_row: &[f32],
+    quant_bias: f32,
+    quant_bias_numerator: f32,
+    mul: f32,
+) {
+    #[cfg(target_arch = "aarch64")]
+    {
+        if std::arch::is_aarch64_feature_detected!("neon") {
+            // SAFETY: NEON availability checked above.
+            unsafe {
+                dequant_hf_row_neon(row, matrix_row, quant_bias, quant_bias_numerator, mul);
+            }
+            return;
+        }
+    }
+    dequant_hf_row_scalar(row, matrix_row, quant_bias, quant_bias_numerator, mul);
+}
+
+#[inline]
+fn dequant_hf_row_scalar(
+    row: &mut [f32],
+    matrix_row: &[f32],
+    quant_bias: f32,
+    quant_bias_numerator: f32,
+    mul: f32,
+) {
+    for (q, &m) in row.iter_mut().zip(matrix_row) {
+        let qn = q.to_bits() as i32;
+        *q = qn as f32;
+        if q.abs() <= 1.0 {
+            *q *= quant_bias;
+        } else {
+            *q -= quant_bias_numerator / *q;
+        }
+        *q *= m;
+        *q *= mul;
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "neon")]
+unsafe fn dequant_hf_row_neon(
+    row: &mut [f32],
+    matrix_row: &[f32],
+    quant_bias: f32,
+    quant_bias_numerator: f32,
+    mul: f32,
+) {
+    use std::arch::aarch64::*;
+
+    // Row widths are always bw*8 (a multiple of 8); process 4 lanes at a time
+    // and fall back to scalar for any tail (defensive).
+    let len = row.len().min(matrix_row.len());
+    let chunks = len / 4;
+
+    let v_bias = vdupq_n_f32(quant_bias);
+    let v_num = vdupq_n_f32(quant_bias_numerator);
+    let v_one = vdupq_n_f32(1.0);
+    let v_mul = vdupq_n_f32(mul);
+
+    let row_ptr = row.as_mut_ptr();
+    let mat_ptr = matrix_row.as_ptr();
+    for i in 0..chunks {
+        let off = i * 4;
+        // Reinterpret the stored quantized integers and convert to f32.
+        let qi = vld1q_s32(row_ptr.add(off) as *const i32);
+        let x = vcvtq_f32_s32(qi);
+
+        // Adaptive quant bias: |x| <= 1 -> x*bias, else x - numerator/x.
+        let absx = vabsq_f32(x);
+        let small = vcleq_f32(absx, v_one);
+        let small_val = vmulq_f32(x, v_bias);
+        let large_val = vsubq_f32(x, vdivq_f32(v_num, x));
+        let adj = vbslq_f32(small, small_val, large_val);
+
+        let m = vld1q_f32(mat_ptr.add(off));
+        let res = vmulq_f32(vmulq_f32(adj, m), v_mul);
+        vst1q_f32(row_ptr.add(off), res);
+    }
+
+    let tail = chunks * 4;
+    if tail < len {
+        dequant_hf_row_scalar(
+            &mut row[tail..len],
+            &matrix_row[tail..len],
+            quant_bias,
+            quant_bias_numerator,
+            mul,
         );
     }
 }
