@@ -10,6 +10,7 @@ benchmarks/candidates/**/uv.lock
 *.node
 *.so
 *.pyi
+!src/python-jxlit/jxlit/_jxlit.pyi
 dist/
 src/node-jxlit/binding.js
 src/node-jxlit/binding.d.ts

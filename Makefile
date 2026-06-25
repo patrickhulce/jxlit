@@ -1,4 +1,4 @@
-.PHONY: all build lint lint-fix typecheck test format benchmark trace gen-test-assets \
+.PHONY: all build lint lint-fix typecheck test format benchmark trace gen-test-assets check-public-repo \
         build-rust build-python build-node build-wasm build-bench-rust build-bench-python \
         build-bench-candidates benchmark-compare \
         lint-rust lint-python lint-node lint-wasm \
@@ -26,6 +26,7 @@ endif
 
 all: build lint typecheck test
 
+
 gen-test-assets:
 	uv run scripts/gen_test_card.py
 
@@ -43,15 +44,15 @@ build-node:
 build-wasm:
 	pnpm --dir src/wasm-jxlit build
 
-lint: lint-rust lint-python lint-node lint-wasm
+lint: check-public-repo lint-rust lint-python lint-node lint-wasm
 
 lint-rust:
 	cargo fmt --all -- --check
 	cargo clippy -p jxlit -p jxlit_node_bindings -p jxlit_wasm_bindings -- -D warnings
 
 lint-python:
-	cd src/python-jxlit && uv run ruff check .
-	cd src/python-jxlit && uv run ruff format --check .
+	cd src/python-jxlit && uv run --no-sync ruff check .
+	cd src/python-jxlit && uv run --no-sync ruff format --check .
 
 lint-node:
 	pnpm --dir src/node-jxlit lint
@@ -67,8 +68,8 @@ lint-fix-rust:
 		-p jxlit -p jxlit_node_bindings -p jxlit_wasm_bindings -- -D warnings
 
 lint-fix-python:
-	cd src/python-jxlit && uv run ruff check --fix .
-	cd src/python-jxlit && uv run ruff format .
+	cd src/python-jxlit && uv run --no-sync ruff check --fix .
+	cd src/python-jxlit && uv run --no-sync ruff format .
 
 lint-fix-node:
 	pnpm --dir src/node-jxlit lint:fix
@@ -79,7 +80,7 @@ lint-fix-wasm:
 typecheck: typecheck-python typecheck-node typecheck-wasm
 
 typecheck-python:
-	cd src/python-jxlit && uv run mypy jxlit tests
+	cd src/python-jxlit && uv run --no-sync mypy jxlit tests
 
 typecheck-node:
 	pnpm --dir src/node-jxlit typecheck
@@ -93,7 +94,7 @@ format-rust:
 	cargo fmt --all
 
 format-python:
-	cd src/python-jxlit && uv run ruff format .
+	cd src/python-jxlit && uv run --no-sync ruff format .
 
 format-node:
 	pnpm --dir src/node-jxlit format
@@ -107,7 +108,7 @@ test-rust:
 	cargo test -p jxlit -p jxlit_wasm_bindings
 
 test-python: build-python
-	cd src/python-jxlit && uv run pytest
+	cd src/python-jxlit && uv run --no-sync pytest
 
 test-node: build-node
 	pnpm --dir src/node-jxlit test
