@@ -39,7 +39,7 @@ Aggregate decode throughput (MP/s) as the number of parallel workers scales from
 When the output needs to live in host RAM, `libjxl` leads; jxlit lands mid-pack while
 staying pure Rust.
 
-![Worker scaling, decoding to CPU memory](https://github.com/user-attachments/assets/08bb3824-468c-417e-81a6-50474140e193)
+![Worker scaling, decoding to CPU memory](https://ik.imagekit.io/psh/Netflix/bench_cpu.webp)
 
 > Benchmarks from a MacBook Pro M3 Pro.
 
@@ -48,7 +48,7 @@ staying pure Rust.
 When the output is destined for the GPU, jxlit's hybrid pipeline delivers the highest
 throughput by decoding straight into VRAM.
 
-![Worker scaling, decoding to GPU memory](https://github.com/user-attachments/assets/ca3ce86c-aa9c-47af-afdf-aee63bb758bc)
+![Worker scaling, decoding to GPU memory](https://ik.imagekit.io/psh/Netflix/bench_gpu.webp)
 
 ## Prerequisites
 
