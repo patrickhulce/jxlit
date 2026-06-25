@@ -1,0 +1,7 @@
+# libjxl candidate: raw JxlDecoder C API, interleaved float32 RGB output.
+name = "libjxl"
+program = "build/bench-libjxl"
+
+[[configs]]
+hardware = "cpu"
+destination = "cpu"

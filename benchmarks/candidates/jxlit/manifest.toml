@@ -1,0 +1,28 @@
+# jxlit candidate: config shim around the repo's jxlit-benchmark binary.
+# No separate build here - `make build-bench-rust` produces the binary.
+name = "jxlit"
+program = "{repo_root}/target/release/jxlit-benchmark"
+cwd = "{repo_root}"
+
+# CPU baseline: apples-to-apples against the other CPU/CPU candidates.
+[[configs]]
+hardware = "cpu"
+destination = "cpu"
+layout = "planar"
+action = "decode_cpu"
+
+# Hybrid GPU compute, CPU destination.
+[[configs]]
+hardware = "gpu"
+destination = "cpu"
+layout = "planar"
+action = "decode_gpu"
+requires = "gpu"
+
+# Hybrid GPU compute, GPU destination.
+[[configs]]
+hardware = "gpu"
+destination = "gpu"
+layout = "planar"
+action = "decode_gpu"
+requires = "gpu"

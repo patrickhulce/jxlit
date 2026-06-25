@@ -1,0 +1,7 @@
+# jxl-oxide candidate: upstream jxl-oxide crate, multithreaded (rayon).
+name = "jxl-oxide"
+program = "target/release/bench-jxl-oxide"
+
+[[configs]]
+hardware = "cpu"
+destination = "cpu"

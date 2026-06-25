@@ -1,0 +1,8 @@
+# djxl candidate: libjxl C API decoding to the codestream's native sample type
+# and channel count, matching the djxl CLI's PackedPixelFile output.
+name = "djxl"
+program = "build/bench-djxl"
+
+[[configs]]
+hardware = "cpu"
+destination = "cpu"

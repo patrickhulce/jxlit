@@ -1,0 +1,22 @@
+# Standalone candidate crate (its own workspace, decoupled from the repo
+# workspace) so it pins the upstream jxl-oxide release independently.
+[package]
+name = "bench-jxl-oxide"
+version = "0.0.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "bench-jxl-oxide"
+path = "src/main.rs"
+
+[dependencies]
+jxl-oxide = "0.12"
+
+[workspace]
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3

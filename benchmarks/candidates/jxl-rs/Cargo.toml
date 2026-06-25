@@ -1,0 +1,23 @@
+# Standalone candidate crate (its own workspace). `jxl` is the pure-Rust
+# decoder from libjxl/jxl-rs (the one being integrated into Chromium).
+[package]
+name = "bench-jxl-rs"
+version = "0.0.0"
+edition = "2021"
+license = "BSD-3-Clause"
+publish = false
+
+[[bin]]
+name = "bench-jxl-rs"
+path = "src/main.rs"
+
+[dependencies]
+# Default features enable `all-simd` for the fastest decode path.
+jxl = "0.4"
+
+[workspace]
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3

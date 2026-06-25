@@ -4,15 +4,22 @@ from __future__ import annotations
 
 import argparse
 import json
-import statistics
 import subprocess
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+from benchmark_common import (
+    Summary,
+    WorkerResult,
+    aggregate_results,
+    format_float,
+    format_percent,
+    parse_worker_result,
+)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 RAW_DIR = REPO_ROOT / ".data" / "benchmarks" / "raw"
@@ -22,40 +29,6 @@ DEFAULT_ITERATIONS = 100
 DEFAULT_WORKERS = 1
 DEFAULT_LANGS = ("rust", "python", "node", "wasm")
 SUPPORTED_LANGS = frozenset(DEFAULT_LANGS)
-
-
-@dataclass(frozen=True)
-class WorkerResult:
-    lang: str
-    action: str
-    iterations: int
-    width: int
-    height: int
-    channels: int
-    megapixels: float
-    decode_seconds: float
-    latency_ms: dict[str, float]
-    telemetry: dict[str, Any] | None = None
-
-
-@dataclass(frozen=True)
-class LanguageSummary:
-    lang: str
-    workers: int
-    iterations_per_worker: int
-    total_iterations: int
-    width: int
-    height: int
-    channels: int
-    megapixels: float
-    latency_ms: dict[str, float]
-    per_worker_fps: float
-    per_worker_mps: float
-    aggregate_fps: float
-    aggregate_mps: float
-    total_worker_seconds: float
-    batch_wall_seconds: float
-    overhead: float
 
 
 def parse_args() -> argparse.Namespace:
@@ -119,34 +92,6 @@ def parse_args() -> argparse.Namespace:
         help="Where decoded pixels reside (default: cpu)",
     )
     return parser.parse_args()
-
-
-def percentile(values: list[float], p: float) -> float:
-    if not values:
-        return 0.0
-    if len(values) == 1:
-        return values[0]
-    rank = (p / 100.0) * (len(values) - 1)
-    lower = int(rank // 1)
-    upper = min(lower + 1, len(values) - 1)
-    weight = rank - lower
-    return values[lower] * (1.0 - weight) + values[upper] * weight
-
-
-def parse_worker_result(payload: dict[str, Any]) -> WorkerResult:
-    telemetry = payload.get("telemetry")
-    return WorkerResult(
-        lang=str(payload["lang"]),
-        action=str(payload["action"]),
-        iterations=int(payload["iterations"]),
-        width=int(payload["width"]),
-        height=int(payload["height"]),
-        channels=int(payload["channels"]),
-        megapixels=float(payload["megapixels"]),
-        decode_seconds=float(payload["decode_seconds"]),
-        latency_ms={key: float(value) for key, value in payload["latency_ms"].items()},
-        telemetry=telemetry if isinstance(telemetry, dict) else None,
-    )
 
 
 def build_command(
@@ -253,71 +198,6 @@ def run_worker(
     return parse_worker_result(payload)
 
 
-def aggregate_language(
-    lang: str,
-    workers: int,
-    results: list[WorkerResult],
-    batch_wall_seconds: float,
-) -> LanguageSummary:
-    if not results:
-        raise ValueError(f"no worker results for {lang}")
-
-    iterations_per_worker = results[0].iterations
-    total_iterations = iterations_per_worker * workers
-    width = results[0].width
-    height = results[0].height
-    channels = results[0].channels
-    megapixels = results[0].megapixels
-
-    pooled_means = [result.latency_ms["mean"] for result in results]
-    pooled_p50 = [result.latency_ms["p50"] for result in results]
-    pooled_p95 = [result.latency_ms["p95"] for result in results]
-    pooled_min = [result.latency_ms["min"] for result in results]
-    pooled_max = [result.latency_ms["max"] for result in results]
-
-    per_worker_fps = statistics.mean(
-        result.iterations / result.decode_seconds for result in results
-    )
-    per_worker_mps = statistics.mean(
-        result.megapixels * result.iterations / result.decode_seconds
-        for result in results
-    )
-
-    total_worker_seconds = sum(result.decode_seconds for result in results)
-    total_megapixels = megapixels * total_iterations
-    aggregate_fps = total_iterations / batch_wall_seconds
-    aggregate_mps = total_megapixels / batch_wall_seconds
-    # Share of wall time not spent in measured decode work (0-100%).
-    overhead = (
-        1.0 - total_worker_seconds / (batch_wall_seconds * workers)
-    ) * 100.0
-
-    return LanguageSummary(
-        lang=lang,
-        workers=workers,
-        iterations_per_worker=iterations_per_worker,
-        total_iterations=total_iterations,
-        width=width,
-        height=height,
-        channels=channels,
-        megapixels=megapixels,
-        latency_ms={
-            "mean": statistics.mean(pooled_means),
-            "p50": percentile(sorted(pooled_p50), 50.0),
-            "p95": percentile(sorted(pooled_p95), 95.0),
-            "min": min(pooled_min),
-            "max": max(pooled_max),
-        },
-        per_worker_fps=per_worker_fps,
-        per_worker_mps=per_worker_mps,
-        aggregate_fps=aggregate_fps,
-        aggregate_mps=aggregate_mps,
-        total_worker_seconds=total_worker_seconds,
-        batch_wall_seconds=batch_wall_seconds,
-        overhead=overhead,
-    )
-
-
 def run_language_batch(
     lang: str,
     file_path: Path,
@@ -329,7 +209,7 @@ def run_language_batch(
     layout: str,
     hardware: str,
     destination: str,
-) -> tuple[LanguageSummary, dict[str, Any] | None]:
+) -> tuple[Summary, dict[str, Any] | None]:
     batch_start = time.perf_counter()
     results: list[WorkerResult] = []
 
@@ -354,19 +234,19 @@ def run_language_batch(
 
     batch_wall_seconds = time.perf_counter() - batch_start
     telemetry = next((result.telemetry for result in results if result.telemetry), None)
-    return aggregate_language(lang, workers, results, batch_wall_seconds), telemetry
+    summary = aggregate_results(
+        lang,
+        workers,
+        results,
+        batch_wall_seconds,
+        hardware=hardware,
+        destination=destination,
+    )
+    return summary, telemetry
 
 
-def format_float(value: float, digits: int = 2) -> str:
-    return f"{value:.{digits}f}"
-
-
-def format_percent(value: float, digits: int = 1) -> str:
-    return f"{value:.{digits}f}%"
-
-
-def print_language_summary(summary: LanguageSummary) -> None:
-    print(f"\n== {summary.lang} ==")
+def print_language_summary(summary: Summary) -> None:
+    print(f"\n== {summary.name} ==")
     print(
         f"workers={summary.workers} "
         f"iterations/worker={summary.iterations_per_worker} "
@@ -467,7 +347,7 @@ def save_raw_telemetry(
     return out_path
 
 
-def print_cross_language_table(summaries: list[LanguageSummary]) -> None:
+def print_cross_language_table(summaries: list[Summary]) -> None:
     print("\n== cross-language summary ==")
     header = (
         f"{'lang':<8} {'workers':>7} {'fps':>10} {'MP/s':>10} "
@@ -477,7 +357,7 @@ def print_cross_language_table(summaries: list[LanguageSummary]) -> None:
     print("-" * len(header))
     for summary in summaries:
         print(
-            f"{summary.lang:<8} "
+            f"{summary.name:<8} "
             f"{summary.workers:>7} "
             f"{format_float(summary.aggregate_fps):>10} "
             f"{format_float(summary.aggregate_mps):>10} "
@@ -523,7 +403,7 @@ def main() -> None:
         f"layout={args.layout} hardware={args.hardware} destination={args.destination}"
     )
 
-    summaries: list[LanguageSummary] = []
+    summaries: list[Summary] = []
     telemetry_by_lang: dict[str, dict[str, Any]] = {}
     for lang in langs:
         summary, telemetry = run_language_batch(

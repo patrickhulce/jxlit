@@ -3,6 +3,10 @@
 **/pkg/
 node_modules/
 src/python-jxlit/.venv/
+benchmarks/candidates/**/.venv/
+benchmarks/candidates/**/build/
+benchmarks/candidates/**/target/
+benchmarks/candidates/**/uv.lock
 *.node
 *.so
 *.pyi

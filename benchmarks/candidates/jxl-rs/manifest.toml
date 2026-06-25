@@ -1,0 +1,7 @@
+# jxl-rs candidate: pure-Rust `jxl` crate (libjxl/jxl-rs), single-threaded.
+name = "jxl-rs"
+program = "target/release/bench-jxl-rs"
+
+[[configs]]
+hardware = "cpu"
+destination = "cpu"

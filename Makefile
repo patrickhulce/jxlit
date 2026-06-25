@@ -1,5 +1,6 @@
 .PHONY: all build lint lint-fix typecheck test format benchmark trace gen-test-assets \
         build-rust build-python build-node build-wasm build-bench-rust build-bench-python \
+        build-bench-candidates benchmark-compare \
         lint-rust lint-python lint-node lint-wasm \
         lint-fix-rust lint-fix-python lint-fix-node lint-fix-wasm \
         typecheck-python typecheck-node typecheck-wasm \
@@ -15,6 +16,13 @@ HARDWARE ?= cpu
 DESTINATION ?= cpu
 FILE ?= assets/frame_4K_10bit_e1_d0p5_fd4.jxl
 BENCHMARK_ARGS = --workers $(WORKERS) --iterations $(ITERATIONS) --file $(FILE) --threads $(THREADS) --layout $(LAYOUT) --hardware $(HARDWARE) --destination $(DESTINATION)
+BENCHMARK_COMPARE_ARGS = --workers $(WORKERS) --iterations $(ITERATIONS) --file $(FILE) --threads $(THREADS) --layout $(LAYOUT)
+ifdef WORKER_SWEEP
+BENCHMARK_COMPARE_ARGS += --worker-sweep $(WORKER_SWEEP)
+endif
+ifdef DECODERS
+BENCHMARK_COMPARE_ARGS += --decoders $(DECODERS)
+endif
 
 all: build lint typecheck test
 
@@ -138,3 +146,13 @@ benchmark-wasm: build-wasm
 
 trace:
 	python3 scripts/trace.py
+
+build-bench-candidates:
+	$(MAKE) -C benchmarks/candidates/libjxl build
+	$(MAKE) -C benchmarks/candidates/djxl build
+	cargo build --release --manifest-path benchmarks/candidates/jxl-oxide/Cargo.toml
+	cargo build --release --manifest-path benchmarks/candidates/jxl-rs/Cargo.toml
+	cd benchmarks/candidates/imagecodecs && uv sync
+
+benchmark-compare: build-bench-rust build-bench-candidates
+	python3 scripts/benchmark_compare.py $(BENCHMARK_COMPARE_ARGS)

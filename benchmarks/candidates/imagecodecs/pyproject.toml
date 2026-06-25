@@ -1,0 +1,15 @@
+[project]
+name = "jxlit-bench-imagecodecs"
+version = "0.0.0"
+description = "imagecodecs (libjxl) decode benchmark candidate for jxlit"
+requires-python = ">=3.10"
+dependencies = [
+    "imagecodecs>=2024.1.1",
+    "numpy>=1.24",
+    # torch provides the GPU destination path (CUDA on Linux, MPS on macOS).
+    "torch>=2.2",
+]
+
+[tool.uv]
+# This is a runnable script project, not a package to build/install.
+package = false

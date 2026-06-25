@@ -1,0 +1,14 @@
+# imagecodecs candidate: libjxl decode via Python, CPU dest and PyTorch GPU dest.
+name = "imagecodecs"
+program = "uv"
+base_args = ["run", "python", "bench.py"]
+cwd = "{candidate_dir}"
+
+[[configs]]
+hardware = "cpu"
+destination = "cpu"
+
+[[configs]]
+hardware = "cpu"
+destination = "gpu"
+requires = "gpu"
